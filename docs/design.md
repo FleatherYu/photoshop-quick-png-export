@@ -20,7 +20,7 @@ js/cep-bridge.js  ── __adobe_cep__.evalScript ──▶  jsx/host.jsx
 ```
 
 - **规则只有一份**：序号、前缀校验、正则转义、补零全部在 `jsx/core.jsx`。
-  预览和真实导出都调用同一套函数，界面上的「下一个文件」不会和实际写盘结果分叉。
+  预览和真实导出都调用同一套函数，界面上的「导出名称」不会和实际写盘结果分叉。
 - **面板只做输入和展示**：`js/panel.js` 不自己算序号，也不构造文件名；它只把
   `{prefix, digits, folder}` 交给宿主，渲染宿主返回的 `fileName` / `fullPath`。
 - **桥接层**：`js/cep-bridge.js` 负责把参数 JSON 嵌入 `evalScript` 表达式并把返回的

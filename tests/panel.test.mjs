@@ -56,7 +56,7 @@ test("styles define the theme variables the panel toggles", () => {
 });
 
 test("panel UI carries the required labels and behaviours", () => {
-  for (const label of ["前缀", "位数", "输出目录", "下一个文件", "快速导出 PNG"]) {
+  for (const label of ["前缀", "位数", "输出目录", "导出名称", "快速导出 PNG"]) {
     assert.ok(html.includes(label), `missing UI text: ${label}`);
   }
   // No overwrite is enforced by the host: the panel must never send a name.

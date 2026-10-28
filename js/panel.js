@@ -161,7 +161,7 @@
 
         if (!state.prefix.trim()) {
             els.nextFile.textContent = "—";
-            setHint("填写前缀后这里会显示下一个文件名", "placeholder");
+            setHint("填写前缀后这里会显示导出名称", "placeholder");
             return;
         }
 
