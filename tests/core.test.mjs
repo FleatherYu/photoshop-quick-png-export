@@ -316,3 +316,70 @@ test("derivePrefixFromDocument output always passes validatePrefix", () => {
   }
 });
 
+test("compareLayerPaths yields panel order: parents before children, top to bottom", () => {
+  const paths = [[1, 2], [0, 1], [1], [0], [0, 0]];
+  assert.deepEqual(paths.slice().sort(core.compareLayerPaths), [[0], [0, 0], [0, 1], [1], [1, 2]]);
+});
+
+test("orderSelectedLayers keeps panel order, dedupes ids and ignores unknown layers", () => {
+  const items = [
+    { id: 7, name: "G", path: [2] },
+    { id: 8, name: "g-child", path: [2, 0] },
+    { id: 9, name: "red", path: [5] },
+    { id: 10, name: "top", path: [0] }
+  ];
+  const ordered = core.orderSelectedLayers(items, [9, 8, 7, 10, 7, 999]);
+  assert.deepEqual([...ordered.map((layer) => layer.id)], [10, 7, 9]);
+});
+
+test("orderSelectedLayers drops selected descendants when their group is selected", () => {
+  const items = [
+    { id: 1, name: "G", path: [0] },
+    { id: 2, name: "g-a", path: [0, 0] },
+    { id: 3, name: "g-b", path: [0, 1] },
+    { id: 4, name: "other", path: [1] }
+  ];
+  const ordered = core.orderSelectedLayers(items, [2, 1, 3, 4]);
+  assert.deepEqual([...ordered.map((layer) => layer.id)], [1, 4]);
+});
+
+test("buildBatchNames continues after the highest existing number", () => {
+  const plan = core.buildBatchNames(["p-01.png", "p-03.png", "P-09.png"], "p", 2, 3, true);
+  assert.equal(plan.startNumber, 10);
+  assert.equal(plan.maxNumber, 9);
+  assert.deepEqual([...plan.names], ["p-10.png", "p-11.png", "p-12.png"]);
+});
+
+test("buildBatchNames ignores zero and negative counts", () => {
+  for (const count of [0, -3, null, undefined, "2"]) {
+    const plan = core.buildBatchNames(["p-01.png"], "p", 2, count, false);
+    assert.equal(plan.startNumber, 2, String(count));
+    assert.deepEqual([...plan.names], [], String(count));
+  }
+});
+
+test("summarizeBatch counts exported, skipped, failed and unprocessed", () => {
+  const counts = core.summarizeBatch([{}, {}], [{}], { code: "SAVE_FAILED" }, 3);
+  assert.equal(counts.exported, 2);
+  assert.equal(counts.skipped, 1);
+  assert.equal(counts.failed, 1);
+  assert.equal(counts.unprocessed, 3);
+  assert.equal(counts.total, 7);
+  assert.equal(counts.allSkipped, false);
+});
+
+test("summarizeBatch marks a batch where everything was skipped", () => {
+  const counts = core.summarizeBatch([], [{}, {}], null, 0);
+  assert.equal(counts.allSkipped, true);
+  assert.equal(counts.total, 2);
+  assert.equal(counts.failed, 0);
+});
+
+test("summarizeBatch treats a failed item as stopping the batch", () => {
+  const counts = core.summarizeBatch([{ number: 1 }], [], { code: "SAVE_FAILED" }, 0);
+  assert.equal(counts.exported, 1);
+  assert.equal(counts.failed, 1);
+  assert.equal(counts.total, 2);
+  assert.equal(counts.allSkipped, false);
+});
+

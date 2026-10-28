@@ -262,6 +262,73 @@ input[type="text"]::placeholder {
   border-color: var(--accent);
 }
 
+/* ---------- batch selection / details ---------- */
+
+.selection {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.selection .preview {
+  margin-bottom: 2px;
+}
+
+.selection-list {
+  max-height: 84px;
+  margin: 0 0 6px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.selection .hint {
+  margin: 0 0 6px;
+}
+
+.selection .btn-ghost {
+  width: 100%;
+}
+
+.batch-details {
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.batch-details summary {
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.batch-details-body {
+  max-height: 140px;
+  padding: 0 8px 6px;
+  overflow-y: auto;
+  color: var(--fg);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ---------- last export ---------- */
 
 .last {

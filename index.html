@@ -12,6 +12,24 @@
   </div>
 
   <div class="row">
+    <span class="label">范围</span>
+    <div class="seg" id="mode" role="group" aria-label="导出范围">
+      <button type="button" data-mode="document" aria-pressed="true">整图</button>
+      <button type="button" data-mode="selection" aria-pressed="false">选中图层</button>
+    </div>
+  </div>
+
+  <div id="selection-box" class="selection hidden">
+    <div class="preview">
+      <span class="preview-label">选中</span>
+      <span class="preview-value" id="selection-summary">—</span>
+    </div>
+    <div class="selection-list" id="selection-list"></div>
+    <p class="hint selection-note">每个选中对象导出一张；透明或依赖外部的对象会跳过，跳过项不占编号。</p>
+    <button type="button" id="refresh-selection" class="btn-ghost">刷新选择</button>
+  </div>
+
+  <div class="row">
     <label class="label" for="prefix">前缀</label>
     <input id="prefix" type="text" maxlength="120" autocomplete="off" spellcheck="false"
            placeholder="例如 261028-123">
@@ -42,6 +60,11 @@
   <button type="button" id="export" class="btn-primary">快速导出 PNG</button>
 
   <div class="status" id="status" role="status" aria-live="polite">就绪。</div>
+
+  <details id="batch-details" class="batch-details hidden">
+    <summary>导出详情</summary>
+    <div class="batch-details-body" id="batch-details-body"></div>
+  </details>
 
   <div id="last-export" class="last hidden">
     <div class="last-head">

@@ -16,6 +16,10 @@
  *   matchSequence(fileName, prefix, caseInsensitive) -> number | null
  *   computeNext(fileNames, prefix, caseInsensitive)  -> {nextNumber, maxNumber, existingCount}
  *   computeExport(fileNames, prefix, digits, caseInsensitive) -> {nextNumber, maxNumber, existingCount, fileName}
+ *   compareLayerPaths(left, right)            -> number (panel order, top to bottom)
+ *   orderSelectedLayers(items, selectedIds)   -> panel-order records, selected ancestors win
+ *   buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) -> {startNumber, names, ...}
+ *   summarizeBatch(successes, skipped, failed, unprocessedCount) -> counts
  *   escapeRegExp(text)                        -> string
  *   derivePrefixFromDocument(docName)         -> {prefix, changed, documentName}
  *   toJson(value)                             -> ASCII-only JSON string (safe for evalScript)
@@ -242,6 +246,111 @@ var QPECore = (function () {
         };
     }
 
+    /* ---------- batch layer planning ---------- */
+
+    // Compares two layer paths ([index at each level], 0 = topmost sibling) and
+    // yields panel order: parents before their children, siblings top to bottom.
+    function compareLayerPaths(left, right) {
+        var length = left.length < right.length ? left.length : right.length;
+        for (var i = 0; i < length; i++) {
+            if (left[i] !== right[i]) {
+                return left[i] < right[i] ? -1 : 1;
+            }
+        }
+        return left.length - right.length;
+    }
+
+    function isPathPrefix(prefix, path) {
+        if (prefix.length >= path.length) {
+            return false;
+        }
+        for (var i = 0; i < prefix.length; i++) {
+            if (prefix[i] !== path[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // items = [{id, name, path:[...]}]; selectedIds = layer ids in any order.
+    // Returns panel-ordered records, dropping a selected descendant when one of
+    // its selected ancestors is already in the batch (the group contains it).
+    function orderSelectedLayers(items, selectedIds) {
+        var byId = {};
+        var i;
+        for (i = 0; i < items.length; i++) {
+            byId[items[i].id] = items[i];
+        }
+        var selected = [];
+        var seen = {};
+        for (i = 0; i < selectedIds.length; i++) {
+            var id = selectedIds[i];
+            if (seen[id]) {
+                continue;
+            }
+            if (byId[id]) {
+                seen[id] = true;
+                selected[selected.length] = byId[id];
+            }
+        }
+        selected.sort(function (left, right) {
+            return compareLayerPaths(left.path, right.path);
+        });
+        var kept = [];
+        for (i = 0; i < selected.length; i++) {
+            var covered = false;
+            for (var j = 0; j < kept.length; j++) {
+                if (isPathPrefix(kept[j].path, selected[i].path)) {
+                    covered = true;
+                    break;
+                }
+            }
+            if (!covered) {
+                kept[kept.length] = selected[i];
+            }
+        }
+        return kept;
+    }
+
+    // Expected names for the next `count` exports. This is only a plan: the
+    // host re-scans the folder before every save, so skipped objects do not
+    // consume a number.
+    function buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) {
+        var next = computeNext(fileNames, prefix, caseInsensitive);
+        var total = 0;
+        if (typeof count === "number" && isFinite(count) && count > 0) {
+            total = Math.floor(count);
+        }
+        var names = [];
+        for (var i = 0; i < total; i++) {
+            names[i] = buildFileName(prefix, digits, next.nextNumber + i);
+        }
+        return {
+            startNumber: next.nextNumber,
+            maxNumber: next.maxNumber,
+            existingCount: next.existingCount,
+            names: names
+        };
+    }
+
+    // Shared counts for the panel summary and the host result payload.
+    function summarizeBatch(successes, skipped, failed, unprocessedCount) {
+        var exported = successes ? successes.length : 0;
+        var skippedCount = skipped ? skipped.length : 0;
+        var failedCount = failed ? 1 : 0;
+        var unprocessed = (
+            typeof unprocessedCount === "number" && isFinite(unprocessedCount) && unprocessedCount > 0
+        ) ? Math.floor(unprocessedCount) : 0;
+        return {
+            exported: exported,
+            skipped: skippedCount,
+            failed: failedCount,
+            unprocessed: unprocessed,
+            total: exported + skippedCount + failedCount + unprocessed,
+            allSkipped: exported === 0 && skippedCount > 0 && failedCount === 0 && unprocessed === 0
+        };
+    }
+
     /* ---------- JSON (ASCII only) ---------- */
 
     function hex4(code) {
@@ -371,6 +480,10 @@ var QPECore = (function () {
         matchSequence: matchSequence,
         computeNext: computeNext,
         computeExport: computeExport,
+        compareLayerPaths: compareLayerPaths,
+        orderSelectedLayers: orderSelectedLayers,
+        buildBatchNames: buildBatchNames,
+        summarizeBatch: summarizeBatch,
         escapeRegExp: escapeRegExp,
         toJson: toJson
     };

@@ -30,6 +30,14 @@ var CEPBridge = (function () {
         saved: false,
         path: ""
     };
+    // Fixed fake selection: two plain layers and one group. The mock skips the
+    // group as fully transparent so the panel's partial-result path is visible
+    // in a browser preview without touching Photoshop.
+    var MOCK_SELECTION = [
+        { id: 2, name: "标题文字", isGroup: false },
+        { id: 3, name: "产品图", isGroup: false },
+        { id: 5, name: "装饰组", isGroup: true }
+    ];
 
     /* ---------- public API ---------- */
 
@@ -255,6 +263,154 @@ var CEPBridge = (function () {
         };
     }
 
+    // Returns the fake selection with expected names, mirroring the host's
+    // previewSelectedLayers payload.
+    function mockPreviewSelected(args) {
+        if (!mockDocOpen) {
+            return {
+                ok: false,
+                code: "NO_DOCUMENT",
+                message: "请先打开一个 Photoshop 文档"
+            };
+        }
+        var prefix = String(args.prefix || "").replace(/^\s+|\s+$/g, "");
+        if (!prefix) {
+            return {
+                ok: false,
+                code: "EMPTY",
+                message: "请输入文件名前缀"
+            };
+        }
+        var digits = Number(args.digits) || 2;
+        var folderAvailable = false;
+        var start = 1;
+        var maxNumber = 0;
+        var existingCount = 0;
+        if (args.folder) {
+            if (args.folder !== MOCK_FOLDER) {
+                return {
+                    ok: false,
+                    code: "FOLDER_MISSING",
+                    message: "输出文件夹不存在或无法访问：" + args.folder
+                };
+            }
+            var scan = mockScan(prefix, digits);
+            start = scan.nextNumber;
+            maxNumber = scan.maxNumber;
+            existingCount = scan.existingCount;
+            folderAvailable = true;
+        }
+        var items = [];
+        for (var i = 0; i < MOCK_SELECTION.length; i++) {
+            items[items.length] = {
+                id: MOCK_SELECTION[i].id,
+                name: MOCK_SELECTION[i].name,
+                isGroup: MOCK_SELECTION[i].isGroup,
+                expectedFileName: prefix + "-" + mockPad(start + i, digits) + ".png"
+            };
+        }
+        return {
+            ok: true,
+            document: mockDoc.name,
+            selectionKey: "mock-selection",
+            selectedCount: MOCK_SELECTION.length,
+            count: items.length,
+            items: items,
+            skipped: [],
+            folderAvailable: folderAvailable,
+            startNumber: start,
+            maxNumber: maxNumber,
+            existingCount: existingCount,
+            warnings: []
+        };
+    }
+
+    function mockExportSelected(args) {
+        if (!mockDocOpen) {
+            return {
+                ok: false,
+                code: "NO_DOCUMENT",
+                message: "请先打开一个 Photoshop 文档"
+            };
+        }
+        var prefix = String(args.prefix || "").replace(/^\s+|\s+$/g, "");
+        if (!prefix) {
+            return {
+                ok: false,
+                code: "EMPTY",
+                message: "请输入文件名前缀"
+            };
+        }
+        var digits = Number(args.digits) || 2;
+        if (!args.folder) {
+            return {
+                ok: false,
+                code: "NO_FOLDER",
+                message: "请选择 PNG 输出文件夹"
+            };
+        }
+        if (args.folder !== MOCK_FOLDER) {
+            return {
+                ok: false,
+                code: "FOLDER_MISSING",
+                message: "输出文件夹不存在或无法访问：" + args.folder
+            };
+        }
+        if (args.selectionKey && args.selectionKey !== "mock-selection") {
+            return {
+                ok: false,
+                code: "SELECTION_CHANGED",
+                message: "当前文档或选中的图层已发生变化，请刷新选择后重试"
+            };
+        }
+        var scan = mockScan(prefix, digits);
+        var successes = [];
+        for (var i = 0; i < 2; i++) {
+            var number = scan.nextNumber + i;
+            var fileName = prefix + "-" + mockPad(number, digits) + ".png";
+            successes[successes.length] = {
+                id: MOCK_SELECTION[i].id,
+                name: MOCK_SELECTION[i].name,
+                isGroup: MOCK_SELECTION[i].isGroup,
+                number: number,
+                fileName: fileName,
+                fullPath: MOCK_FOLDER + "\\" + fileName
+            };
+            mockFiles(MOCK_FOLDER).push(fileName);
+        }
+        var skipped = [{
+            id: MOCK_SELECTION[2].id,
+            name: MOCK_SELECTION[2].name,
+            isGroup: MOCK_SELECTION[2].isGroup,
+            code: "EMPTY",
+            message: "完全透明，已跳过（不占编号）"
+        }];
+        mockDoc.saved = true;
+        return {
+            ok: true,
+            code: "OK",
+            message: "批量导出完成：成功 2 张，跳过 1 项",
+            completed: true,
+            total: MOCK_SELECTION.length,
+            successes: successes,
+            skipped: skipped,
+            failed: null,
+            unprocessedCount: 0,
+            converted: false,
+            warnings: [],
+            cleanupErrors: [],
+            document: mockDoc.name,
+            counts: {
+                exported: 2,
+                skipped: 1,
+                failed: 0,
+                unprocessed: 0,
+                total: 3,
+                allSkipped: false
+            }
+        };
+    }
+
     function mockSuggestPrefix(name) {
         var base = String(name).replace(/\.[A-Za-z0-9]{1,5}$/, "");
         var cleaned = base.replace(/[\\/:*?"<>|]/g, "").replace(/^\s+|\s+$/g, "");
@@ -295,6 +451,12 @@ var CEPBridge = (function () {
         if (method === "exportPng") {
             return mockExport(args);
         }
+        if (method === "previewSelectedLayers") {
+            return mockPreviewSelected(args);
+        }
+        if (method === "exportSelectedLayers") {
+            return mockExportSelected(args);
+        }
         if (method === "pickFolder") {
             mockFiles(MOCK_FOLDER);
             return {
@@ -318,7 +480,7 @@ var CEPBridge = (function () {
     function mockCall(method, args, callback) {
         window.setTimeout(function () {
             var result = mockDispatch(method, args);
-            if (method === "exportPng" && result.ok) {
+            if ((method === "exportPng" || method === "exportSelectedLayers") && result.ok) {
                 mockDoc.saved = true;
             }
             callback(result);

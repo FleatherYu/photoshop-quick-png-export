@@ -6,11 +6,11 @@
 -->
 <ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.fleatheryu.pngsmartexport"
-                   ExtensionBundleVersion="1.0.0"
+                   ExtensionBundleVersion="1.1.0"
                    ExtensionBundleName="PNG Smart Export">
 
     <ExtensionList>
-        <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.0.0" />
+        <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.1.0" />
     </ExtensionList>
 
     <ExecutionEnvironment>

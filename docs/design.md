@@ -120,3 +120,86 @@ CC 2019 里实测，文件 `QPE-测试-05.png` 的 `File.name` 返回
 面板 300×360，最小 240×240。`js/cep-bridge.js` 读取
 `getHostEnvironment().appSkinInfo.panelBackgroundColor` 的亮度，在 `body` 上切
 `theme-dark` / `theme-light`，颜色全部走 CSS 变量，深色是默认值。
+
+## 图层批量导出（1.1.0）
+
+面板顶部新增模式切换：`整张画面` 用已有的 `preview` / `exportPng`，`选中图层` 用
+`previewSelectedLayers` / `exportSelectedLayers`。批量模式读取的是 Photoshop 当前的
+图层选择，而不是面板里另外勾选。
+
+### 读取选择（CC 2019 兼容）
+
+ExtendScript DOM 没有「多选图层」属性（`doc.activeLayer` 只返回最后选中的一个）。
+宿主用 ActionManager 读取文档描述符，`targetLayersIDs` 列表在 CC 2019 上可靠：
+每一项是引用，`getReference(i).getIdentifier()` 得到图层 id，再用 `executeActionGet(ref)`
+读出该图层的描述符；按 id 映射到 DOM 图层树（`layer.id` 与 ActionManager 的 id 一致，
+组也一样）。`targetLayersIndexes` / `targetLayers` 在旧版本上会漏掉活动图层或返回偏移
+索引，只作为不支持 `targetLayersIDs` 的宿主的后备路径。
+
+拿到 id 后遍历 DOM 层树，按面板从上到下排序（父组在子层之前）；同时选中父组和子层时
+只保留父组。`previewSelectedLayers` 返回同样的顺序与预计文件名，面板展示给用户。
+选择可能随时变化，所以返回一个 `selectionKey`（文档名 + 尺寸 + id 列表），
+`exportSelectedLayers` 开始时重算并比对，不一致直接返回 `SELECTION_CHANGED`，
+让用户刷新后重试。
+
+### 隔离与导出流程
+
+1. 校验前缀、位数、目录（复用整图导出的校验）。
+2. `doc.duplicate()` 一次得到工作副本；源文档不再被触碰，结束时关闭副本并重新激活源文档。
+3. 记录副本里所有图层的可见性快照。
+4. 按顺序逐项处理：
+   - 计算依赖（见下），有跨边界依赖 → 记入 `skipped`，不占编号；
+   - 恢复可见性快照，只显示目标对象及其祖先链，组则恢复组内原有的子层可见性；
+   - 用 `PNGSaveOptions` 把副本存成目标文件名（`asCopy = true`；先按
+     `computeExport` 取 下一个编号，保存前再次确认文件不存在）；
+   - 重新 `app.open` 这个 PNG，检查活动图层 `bounds` 面积：面积为 0 说明整张全透明，
+     关闭文档、删除文件、记入 `skipped`，编号不前进；否则计入 `successes`。
+5. 任一项保存/校验失败：立即停止，保留已成功的文件，返回 `failed` 项和
+   `unprocessedCount`（排在后面的对象没有导出）。
+6. `finally` 中关闭所有临时文档、恢复 `app.displayDialogs`、恢复源文档为活动文档，
+   清理失败只记入 `cleanupErrors`，不掩盖主结果。
+
+> 为什么用「保存后重开 PNG 判空」：ActionManager 的 alpha 直方图、`doc.trim()`、
+> flatten 后载入 Trsp、BMP 32 位 alpha、TIFF alpha 在 CC 2019 上全部实测不可行
+> （探针记录见 `docs/acceptance.md`）；重开 PNG 的 `bounds` 是唯一稳定可靠的
+> 「合成后是否有像素」判据。
+
+### 依赖支持矩阵（首版，保守）
+
+| 情况 | 处理 |
+| --- | --- |
+| 目标自身是剪贴蒙版内容（`layer.grouped`） | 跳过，`CLIPPED` |
+| 目标上方紧邻的剪贴蒙版内容依赖它（外部剪贴基底） | 跳过，`CLIPPED` |
+| 目标自身 / 组内 / 祖先的非正常混合模式 | 跳过，`BLEND` |
+| 穿透组内部有非正常混合模式（会读组外背景） | 跳过，`BLEND` |
+| 目标上方（同层或祖先层）有调整图层 | 跳过，`ADJUSTMENT` |
+| 组内部自足的剪贴 / 调整层 | 保留，正常导出 |
+| 完全没有像素（空图层、空组、全透明） | 跳过，`EMPTY`，不占编号 |
+
+`adjustment` 分支因为 CC 2019 的 DoJavaScript 无法用脚本创建调整图层（`Mk AdjL`
+报「不能完成命令，因为程序错误」），没有真机样例，只在代码层面实现；遇到时行为是
+跳过并给出原因，不会导出错误结果。
+
+### 返回值
+
+`previewSelectedLayers`：`document`、`selectionKey`、`selectedCount`（原始选中数）、
+`count`（去重后可导出数）、`items`（`id/name/isGroup/expectedFileName`）、`skipped`
+（`id/name/isGroup/code/message`）、`folderAvailable`、`startNumber/maxNumber/existingCount`、
+`warnings`。
+
+`exportSelectedLayers`：`successes`（`number/fileName/fullPath`）、`skipped`、`failed`
+（`name/code/message`）、`unprocessedCount`、`converted`、`warnings`、`cleanupErrors`、
+`counts`（由 `QPECore.summarizeBatch` 生成：`exported/skipped/failed/unprocessed/total/allSkipped`）。
+
+### 编号与失败语义
+
+编号在保存前按目录现状计算，只有真正保存成功且非全透明的对象才消费编号；跳过的对象
+不占号。所以重跑同一选择会接着目录里的最大编号继续，不会覆盖、不补空洞。整批采用
+「失败即停」：不会为了凑满编号继续导出后续对象，面板会显示成功清单、失败项和原因。
+
+### 面板与 mock
+
+`js/panel.js` 用 `state.mode` 记忆模式（`qpe.mode`），预览与导出按模式分派；
+选中图层模式下，状态区显示「选中 N 项，去重后 M 项」，导出后展示成功 / 跳过列表。
+`js/cep-bridge.js` 的 mock 后端（浏览器里无 CEP 时）提供 `previewSelectedLayers` /
+`exportSelectedLayers`，返回固定 3 个选中对象，方便不开 Photoshop 调界面。

@@ -12,7 +12,7 @@ node scripts/build-host.mjs                                   # 生成 jsx/host.
 node --test --test-isolation=none "tests/*.test.mjs"
 ```
 
-结果：**52 项测试全部通过**（0 失败）。覆盖：
+结果：**61 项测试全部通过**（0 失败）。覆盖：
 
 - 前缀校验：空、首尾空白（含全角空格/不换行空格）、非法字符、结尾句点、超长、中文与内部空格；
 - 默认前缀：文档名去扩展名（`.psd/.png/...`，不误伤 `poster.v2`）、删除 Windows 非法字符、去首尾空白与结尾句点、超长截断、缺名安全，且清洗结果永远能通过 `validatePrefix`；
@@ -20,6 +20,8 @@ node --test --test-isolation=none "tests/*.test.mjs"
 - 文件名与匹配：严格 `前缀-数字.png`、扩展名大小写、正则元字符转义、大小写不敏感；
 - 序号：空目录从 01 开始、取最大值 +1、不复用空洞、不同前缀独立、切换位数不重置；
 - 中文文件名：`QPE-%E6%B5%8B%E8%AF%95-05.png` 解码后识别为序号 5，`100%-05.png` 不崩；
+- 批量选择：路径前缀去重（父组吸收后代）、面板顺序、批量命名、失败停止后的统计（`allSkipped` 等）；
+- 面板行为：模式切换、选中图层预览/导出的调用与状态渲染（VM 里跑真实 `panel.js`）；
 - `toJson` 纯 ASCII 且中文可往返；`host.jsx` 与源码拼接结果一致；
 - 清单 XML 结构、面板 DOM id / 脚本 / 样式与桥接方法一致性；
 - `host.jsx` 在裸 Node 上下文可加载，未知方法/坏参数返回 JSON 错误而不是抛异常。
@@ -68,9 +70,11 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-photoshop.ps1
 > 透明说明：上表是**修复中文文件名问题之后**的完整运行（24/24）。此后做了一次等价
 > 重构——把 `decodePercentName` 从宿主层移进 `matchSequence`，让 preview/export 共用
 > 同一处解码。重构后的真实 Photoshop 复跑因本机用户当时正打开并编辑一个 PSD 文档，
-> 被上面的安全保护跳过（不是失败）；该路径由 52 项 Node 测试覆盖，包含对
-> `QPE-%E6%B5%8B%E8%AF%95-05.png` 的解码匹配断言。关闭 Photoshop 里的文档后，
-> 直接重跑验收脚本即可复核。
+> 被上面的安全保护跳过（不是失败）；该路径由 Node 测试覆盖，包含对
+> `QPE-%E6%B5%8B%E8%AF%95-05.png` 的解码匹配断言。
+>
+> 2026-10-28 加入图层批量导出（1.1.0）后，用同一脚本再次完整复跑：**全部通过**
+> （`ALL CHECKS PASSED`），说明批量功能没有破坏整图导出路径。
 
 ### 2.1 默认前缀取自文档名（真实运行验证）
 
@@ -116,7 +120,7 @@ Close them and rerun this script so your work is never touched.
    于是每 5 秒的文档状态轮询仍会执行默认前缀填充，把刚输入的内容覆盖回文档名。
    修复：`input` 事件里设置 `state.prefixEdited = true`；同时新增
    `tests/panel-behavior.test.mjs`，用 vm + 手写 DOM 跑真实面板脚本：输入后触发
-   轮询回调，断言前缀保持不变（52 项测试）。
+   轮询回调，断言前缀保持不变（现 61 项测试）。
 
 ## 4. 未验证 / 需要人工确认
 
@@ -139,3 +143,60 @@ Close them and rerun this script so your work is never touched.
 7. 输入含 `:` 的前缀 → 明确报错并列出字符，不静默修改；
 8. 关闭所有文档再点导出 → 提示「请先打开一个 Photoshop 文档」；
 9. 换一个前缀（手动输入）→ 序号从 01 重新开始，原前缀的文件不受影响。
+10. 切到「选中图层」模式 → 在图层面板选中 2–3 个图层 → 面板列出对象与预计文件名；
+11. 同时选中一个组和它的子层 → 预览里只出现组，不出现子层；
+12. 选中一个空图层 / 空组 → 预览里标为跳过（不占编号），导出结果里说明原因；
+13. 选中一个有剪贴蒙版内容、且该内容在选中范围之外的图层 → 该项被跳过并说明原因；
+14. 连续导出两次 → 第二批从第一批的最大编号继续，不覆盖、不补空洞；
+15. 导出选中图层后 → 源文档仍保持原样（图层可见性、选择、活动文档都不变）。
+
+## 6. 图层批量导出真机验收（34 项检查全部通过）
+
+脚本：[`scripts/verify-batch-photoshop.ps1`](../scripts/verify-batch-photoshop.ps1) +
+[`tests/photoshop/batch-acceptance.jsx`](../tests/photoshop/batch-acceptance.jsx)。
+用 COM 驱动 Photoshop CC 2019，创建独立测试文档（120×120，图层顺序：
+`图层 1`、red、green、clip-shadow（剪贴）、hidden-blue（隐藏）、G（组：g-empty、
+g-hidden（隐藏）、g-yellow、g-clip（依赖 g-yellow））、empty-layer、
+multiply（正片叠底）），用 `runMenuItem("selectAllLayers")` 造真实多选。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify-batch-photoshop.ps1
+```
+
+2026-10-28 完整运行结果：**34/34 通过**（`ALL BATCH CHECKS PASSED`）：
+
+| 组 | 检查 | 结果 |
+| --- | --- | --- |
+| 预览 | 报告 `targetLayersIDs` 方案可用；5 个可导出对象、5 个跳过（BLEND / CLIPPED / EMPTY）；返回 `selectionKey` | PASS |
+| 过期选择 | 选中项变化后旧 `selectionKey` 导出返回 `SELECTION_CHANGED` | PASS |
+| 首批导出 | 恰好 3 个文件，编号 1–3，`failed` 为空 | PASS |
+| 去重 | 同时选中父组与子层只导出父组一次 | PASS |
+| 跳过 | multiply（混合模式）、empty-layer（空）、clip-shadow（剪贴内容）、图层 1（空）、green（外部剪贴基底）全部跳过且原因正确 | PASS |
+| 续号 | 同一选择再导一次得到 4–6，不覆盖、不复用 1–3 | PASS |
+| 源文档 | 导出后文档名/尺寸/位深/图层可见性/图层数量不变，文档仍为未保存状态 | PASS |
+| 16 位 | 16 位 RGB 文档导出为 8 位 PNG（`converted: true` + 警告），源文档仍 16 位 | PASS |
+| 无文档 | `NO_DOCUMENT` +「请先打开一个 Photoshop 文档」 | PASS |
+| 清理 | 导出后 `displayDialogs` 恢复、没有残留临时文档 | PASS |
+| 文件名 | 8 个预期文件（两批各 3 个 + 16 位 1 个 + 外部剪贴场景 1 个）都存在 | PASS |
+
+**像素级验证**（用 `System.Drawing.Bitmap.GetPixel` 读导出 PNG）：
+
+- `QPE-A-01.png`（组 G）：`(100,20)` = 不透明青色（组内 g-clip 对 g-yellow 的剪贴生效）；
+  `(92,12)` = 黄色（剪贴范围外的基底）；`(100,70)` 透明（隐藏子层没有泄漏）；
+- `QPE-A-02.png`（明确选中的隐藏层 hidden-blue）：`(80,80)` = 不透明蓝色；
+- `QPE-A-03.png`（red）：`(20,20)` = 不透明红色；`(50,50)` 透明（green 没有被带入）；
+- `QPE-A-04.png` / `QPE-A-06.png`：与 01 / 03 像素一致（重复导出的对象内容稳定）；
+- `QPE-D-01.png`：16 位转 8 位后的红色像素正确。
+
+**性能记录**：上面这批 3 个对象的导出约 12.6s（其中逐项保存 PNG 后重开做透明度判定占主要时间），
+`previewSelectedLayers` 约 100ms；没有做更大批量（几十层）的压测。
+
+### 批量导出的未验证项
+
+- **调整图层依赖**：CC 2019 的 `DoJavaScript` 无法用脚本创建调整图层（`Mk AdjL` 直接报
+  「不能完成命令，因为程序错误」，`layer.kind = LEVELS` 报只支持文本/正常），所以
+  `ADJUSTMENT` 跳过分支只有代码实现，**没有真机样例**；遇到时行为是跳过并提示，不会导出错误结果。
+- **部分失败注入**：没有人为制造「中途保存失败」来验证「失败即停 + 保留已成功文件 + 重启后续号」，
+  该逻辑由 Node 测试和代码路径覆盖。
+- **真实 CEP 面板交互**：自动化验收验证的是宿主逻辑与像素结果；模式切换、列表渲染、
+  按钮点击需安装后在 Photoshop 里人工点一遍（见第 5 节第 10–15 条）。
