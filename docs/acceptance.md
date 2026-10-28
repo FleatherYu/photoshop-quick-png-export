@@ -121,7 +121,7 @@ Close them and rerun this script so your work is never touched.
 ## 4. 未验证 / 需要人工确认
 
 - **面板在真实 CEP 里的点击流程**：需要「安装 → 完全退出并重开 Photoshop → 窗口 →
-  扩展功能 → 快速 PNG 导出」，然后手动选目录、点一次导出。自动化验收验证的是
+  扩展功能 → PNG Smart Export」，然后手动选目录、点一次导出。自动化验收验证的是
   面板背后的宿主逻辑（与面板调用同一个 `QPE_call`），不是 CEP 渲染和按钮点击。
 - **Photopea / 其他宿主**：不支持，未测。
 - **macOS**：面板代码跨平台，但安装脚本是 PowerShell，未测。

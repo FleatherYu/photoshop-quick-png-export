@@ -1,4 +1,4 @@
-# Quick PNG Export - uninstaller for Windows.
+# PNG Smart Export - uninstaller for Windows.
 #
 # Removes the copied extension folder. The PlayerDebugMode registry value is
 # left untouched because other unsigned development panels may rely on it;
@@ -14,7 +14,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExtensionId = 'com.fleatheryu.quickpngexport'
+$ExtensionId = 'com.fleatheryu.pngsmartexport'
 $target = Join-Path $TargetRoot $ExtensionId
 
 if (-not (Test-Path $target)) {

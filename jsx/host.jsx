@@ -5,7 +5,7 @@
  */
 
 /*
- * Quick PNG Export - core naming / sequencing logic.
+ * PNG Smart Export - core naming / sequencing logic.
  *
  * This file is intentionally written in ES3 style (no let/const, no arrow
  * functions, no Array.prototype.forEach/map/filter, no String.prototype.trim)
@@ -388,7 +388,7 @@ if (typeof module !== "undefined" && module.exports) {
 }
 
 /*
- * Quick PNG Export - Photoshop host script (ExtendScript).
+ * PNG Smart Export - Photoshop host script (ExtendScript).
  *
  * This file is concatenated after jsx/core.jsx by scripts/build-host.mjs into
  * the shipped jsx/host.jsx that CEP loads as the panel's ScriptPath. Keeping

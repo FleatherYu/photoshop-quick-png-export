@@ -1,5 +1,5 @@
 /*
- * Quick PNG Export - core naming / sequencing logic.
+ * PNG Smart Export - core naming / sequencing logic.
  *
  * This file is intentionally written in ES3 style (no let/const, no arrow
  * functions, no Array.prototype.forEach/map/filter, no String.prototype.trim)

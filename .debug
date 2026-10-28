@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Enables Chrome DevTools remote debugging for this panel on 127.0.0.1:8088. -->
 <ExtensionList>
-    <Extension Id="com.fleatheryu.quickpngexport.panel">
+    <Extension Id="com.fleatheryu.pngsmartexport.panel">
         <HostList>
             <Host Name="PHXS" Port="8088" />
         </HostList>

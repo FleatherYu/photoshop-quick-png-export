@@ -1,4 +1,4 @@
-# Quick PNG Export - real acceptance run against an installed Photoshop.
+# PNG Smart Export - real acceptance run against an installed Photoshop.
 #
 # This drives Photoshop over COM: it loads jsx/host.jsx into Photoshop's
 # ExtendScript engine, creates throw-away documents, and exercises the same

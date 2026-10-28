@@ -1,5 +1,5 @@
 /*
- * Quick PNG Export - Photoshop host script (ExtendScript).
+ * PNG Smart Export - Photoshop host script (ExtendScript).
  *
  * This file is concatenated after jsx/core.jsx by scripts/build-host.mjs into
  * the shipped jsx/host.jsx that CEP loads as the panel's ScriptPath. Keeping

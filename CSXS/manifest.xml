@@ -5,12 +5,12 @@
   older manifest versions, so this also loads on Photoshop 2020+ without edits.
 -->
 <ExtensionManifest Version="7.0"
-                   ExtensionBundleId="com.fleatheryu.quickpngexport"
-                   ExtensionBundleVersion="0.1.0"
-                   ExtensionBundleName="Quick PNG Export">
+                   ExtensionBundleId="com.fleatheryu.pngsmartexport"
+                   ExtensionBundleVersion="1.0.1"
+                   ExtensionBundleName="PNG Smart Export">
 
     <ExtensionList>
-        <Extension Id="com.fleatheryu.quickpngexport.panel" Version="0.1.0" />
+        <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.0.1" />
     </ExtensionList>
 
     <ExecutionEnvironment>
@@ -23,7 +23,7 @@
     </ExecutionEnvironment>
 
     <DispatchInfoList>
-        <Extension Id="com.fleatheryu.quickpngexport.panel">
+        <Extension Id="com.fleatheryu.pngsmartexport.panel">
             <DispatchInfo>
                 <Resources>
                     <MainPath>./index.html</MainPath>
@@ -34,7 +34,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>快速 PNG 导出</Menu>
+                    <Menu>PNG Smart Export</Menu>
                     <Geometry>
                         <Size>
                             <Height>360</Height>

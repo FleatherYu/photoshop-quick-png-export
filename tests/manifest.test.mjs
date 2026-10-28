@@ -133,7 +133,7 @@ test("manifest schema version suits CEP 9 (Photoshop CC 2019)", () => {
 test("bundle ids are consistent", () => {
   const bundleId = root.attrs.ExtensionBundleId;
   assert.match(bundleId, /^[A-Za-z0-9._-]+$/);
-  assert.equal(bundleId, "com.fleatheryu.quickpngexport");
+  assert.equal(bundleId, "com.fleatheryu.pngsmartexport");
 
   const panelId = `${bundleId}.panel`;
   const declared = findAll(find(root, "ExtensionList"), "Extension").map((node) => node.attrs.Id);
@@ -165,7 +165,7 @@ test("panel MainPath and ScriptPath point at shipped files", () => {
 test("panel UI is a dockable Panel with Chinese menu label", () => {
   const ui = find(root, "UI");
   assert.equal(find(ui, "Type").text.trim(), "Panel");
-  assert.equal(find(ui, "Menu").text.trim(), "快速 PNG 导出");
+  assert.equal(find(ui, "Menu").text.trim(), "PNG Smart Export");
   assert.ok(Number(find(ui, "Height").text) > 0);
   assert.ok(Number(find(ui, "Width").text) > 0);
 });
@@ -173,12 +173,12 @@ test("panel UI is a dockable Panel with Chinese menu label", () => {
 test(".debug file matches the panel extension id", () => {
   const debugRoot = parseXml(readFileSync(join(repoRoot, ".debug"), "utf8"));
   const id = find(debugRoot, "Extension").attrs.Id;
-  assert.equal(id, "com.fleatheryu.quickpngexport.panel");
+  assert.equal(id, "com.fleatheryu.pngsmartexport.panel");
 });
 
 test("install.ps1 references the same extension id", () => {
   const script = readFileSync(join(repoRoot, "scripts", "install.ps1"), "utf8");
-  assert.ok(script.includes("com.fleatheryu.quickpngexport"), "install.ps1 must use the panel id");
+  assert.ok(script.includes("com.fleatheryu.pngsmartexport"), "install.ps1 must use the panel id");
 });
 
 test("double-click wrappers call the PowerShell scripts with ExecutionPolicy Bypass", () => {

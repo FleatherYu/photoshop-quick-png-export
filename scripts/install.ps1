@@ -1,4 +1,4 @@
-# Quick PNG Export - installer for Photoshop CC 2019 (CEP 9) on Windows.
+# PNG Smart Export - installer for Photoshop CC 2019 (CEP 9) on Windows.
 #
 # Copies the panel into the per-user CEP extensions folder and switches on
 # PlayerDebugMode so Photoshop accepts this unsigned development build.
@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ExtensionId = 'com.fleatheryu.quickpngexport'
+$ExtensionId = 'com.fleatheryu.pngsmartexport'
 
 $source = Split-Path -Parent $PSScriptRoot
 $target = Join-Path $TargetRoot $ExtensionId
@@ -78,7 +78,7 @@ if (-not $NoDebugMode) {
 
 Write-Host ''
 Write-Host 'Installed. Now restart Photoshop, then open:'
-Write-Host '  Window > Extensions > Quick PNG Export'
+Write-Host '  Window > Extensions > PNG Smart Export'
 Write-Host ''
 Write-Host 'If the panel does not appear:'
 Write-Host '  - confirm the folder above contains CSXS\manifest.xml'

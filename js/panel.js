@@ -1,5 +1,5 @@
 /*
- * Quick PNG Export - panel logic.
+ * PNG Smart Export - panel logic.
  *
  * The panel is deliberately thin: validation and sequence numbering live in the
  * ExtendScript host (jsx/host.jsx) so the preview and the real export always use
