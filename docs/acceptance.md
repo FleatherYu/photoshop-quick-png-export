@@ -64,6 +64,13 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-photoshop.ps1
 验收脚本的输入目录在 `.tmp\ps-verify\export`，每次都重新铺种子文件（`-05`、
 `qpe-测试-09.PNG`、`-20` 目录、`-3 (1).png`、`-abc.png`），不会碰输出目录以外的文件。
 
+> 透明说明：上表是**修复中文文件名问题之后**的完整运行（24/24）。此后做了一次等价
+> 重构——把 `decodePercentName` 从宿主层移进 `matchSequence`，让 preview/export 共用
+> 同一处解码。重构后的真实 Photoshop 复跑因本机用户当时正打开并编辑一个 PSD 文档，
+> 被上面的安全保护跳过（不是失败）；该路径由 42 项 Node 测试覆盖，包含对
+> `QPE-%E6%B5%8B%E8%AF%95-05.png` 的解码匹配断言。关闭 Photoshop 里的文档后，
+> 直接重跑验收脚本即可复核。
+
 ### 安全保护
 
 `verify-photoshop.ps1` 在开始前会先关掉**它自己**上次留下的 `QPE-Test` 等临时文档；
