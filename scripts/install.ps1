@@ -22,8 +22,23 @@ $source = Split-Path -Parent $PSScriptRoot
 $target = Join-Path $TargetRoot $ExtensionId
 $hostScript = Join-Path $source 'jsx\host.jsx'
 
+# Rebuild jsx\host.jsx whenever Node is available, so the installed panel always
+# matches the sources. The repo also ships a prebuilt copy for machines without
+# Node, which is then installed as-is.
+$node = Get-Command node -ErrorAction SilentlyContinue
+if ($node) {
+    Write-Host 'Rebuilding jsx\host.jsx ...'
+    Push-Location $source
+    try {
+        & $node.Source 'scripts\build-host.mjs'
+        if ($LASTEXITCODE -ne 0) { throw 'build-host.mjs failed, nothing was installed.' }
+    } finally {
+        Pop-Location
+    }
+}
+
 if (-not (Test-Path $hostScript)) {
-    throw "jsx\host.jsx is missing. Run 'node scripts/build-host.mjs' first."
+    throw "jsx\host.jsx is missing and Node.js was not found. Run 'node scripts/build-host.mjs' on a machine with Node first."
 }
 if (-not (Test-Path (Join-Path $source 'CSXS\manifest.xml'))) {
     throw "CSXS\manifest.xml is missing - run the installer from the project folder."

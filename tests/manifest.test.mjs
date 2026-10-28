@@ -180,3 +180,13 @@ test("install.ps1 references the same extension id", () => {
   const script = readFileSync(join(repoRoot, "scripts", "install.ps1"), "utf8");
   assert.ok(script.includes("com.fleatheryu.quickpngexport"), "install.ps1 must use the panel id");
 });
+
+test("double-click wrappers call the PowerShell scripts with ExecutionPolicy Bypass", () => {
+  const install = readFileSync(join(repoRoot, "install.cmd"), "utf8");
+  assert.match(install, /-ExecutionPolicy Bypass/);
+  assert.match(install, /scripts\\install\.ps1/);
+
+  const uninstall = readFileSync(join(repoRoot, "uninstall.cmd"), "utf8");
+  assert.match(uninstall, /-ExecutionPolicy Bypass/);
+  assert.match(uninstall, /scripts\\uninstall\.ps1/);
+});

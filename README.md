@@ -21,6 +21,8 @@ photoshop-quick-png-export/
 ├─ jsx/host-body.jsx        Photoshop DOM 操作（导出、选目录）
 ├─ jsx/host.jsx             生成物：core.jsx + host-body.jsx 拼接而成
 ├─ scripts/build-host.mjs   生成 host.jsx（--check 校验是否最新）
+├─ install.cmd              双击安装
+├─ uninstall.cmd            双击卸载
 ├─ scripts/install.ps1      安装到 CEP 扩展目录
 ├─ scripts/uninstall.ps1    卸载
 ├─ scripts/verify-photoshop.ps1  真实 Photoshop 验收（COM 驱动，24 项检查）
@@ -34,34 +36,23 @@ photoshop-quick-png-export/
 node scripts/build-host.mjs
 ```
 
-## 安装
+## 安装（3 步）
 
-1. 先生成宿主脚本（仓库里已带构建好的版本，改过源码才需要）：
+1. 双击项目文件夹里的 **`install.cmd`**。
+   - 从 GitHub 下载的 ZIP 要先右键 ZIP → 属性 → 勾选「解除锁定」，再解压，否则 Windows 可能会拦截脚本。
+   - 脚本会自动重新生成宿主脚本、把面板复制到
+     `%APPDATA%\Adobe\CEP\extensions\com.fleatheryu.quickpngexport`，并打开未签名面板所需的
+     `PlayerDebugMode`。
+2. **完全退出并重新打开 Photoshop**（扩展菜单在启动时读取）。
+3. 菜单 **窗口 → 扩展功能 → 快速 PNG 导出** 打开面板。
 
-   ```powershell
-   node scripts/build-host.mjs
-   ```
+以后修改了面板文件，重新双击 `install.cmd` 再重启 Photoshop 即可。
 
-2. 安装到当前用户的 CEP 扩展目录，并打开未签名面板所需的 PlayerDebugMode：
+**卸载**：双击 **`uninstall.cmd`**（只删面板文件，不动注册表；面板随后从菜单里消失）。
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File scripts\install.ps1
-   ```
-
-   等价于把面板复制到：
-
-   ```
-   %APPDATA%\Adobe\CEP\extensions\com.fleatheryu.quickpngexport
-   ```
-
-   并写入注册表 `HKCU\Software\Adobe\CSXS.9\PlayerDebugMode = 1`。
-
-3. **完全退出并重新打开 Photoshop**（扩展菜单在启动时读取）。
-
-4. 菜单 **窗口 → 扩展功能 → 快速 PNG 导出** 打开面板。
-
-以后修改了面板文件，重新执行第 2 步并重启 Photoshop 即可。
-卸载：`powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1`。
+> 命令行用法与双击等价：
+> `powershell -ExecutionPolicy Bypass -File scripts\install.ps1`、
+> `powershell -ExecutionPolicy Bypass -File scripts\uninstall.ps1`。
 
 ## 使用
 
