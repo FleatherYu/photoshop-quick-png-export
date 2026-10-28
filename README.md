@@ -96,3 +96,13 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-photoshop.ps1
 - 仅导出当前文档的整张画面，不支持按图层或组批量导出。
 - 输出目录必须已存在，面板不会自动创建文件夹。
 - 安装脚本仅支持 Windows；macOS 尚未实测，也未提供安装脚本。
+
+## 后续计划
+
+- **支持更多 Photoshop 版本**：目前只在 Photoshop CC 2019（20.0，CEP 9）上开发并实测；
+  后续会在 Photoshop 2020 及更新版本上逐一验证，修正清单版本、`PlayerDebugMode`
+  位置等兼容性问题。
+- **图层 / 组批量快捷导出**：在现有「整张画面导出一张」之外，计划支持选中图层或图层组后，
+  按同一套 `前缀-编号.png` 规则批量导出多张 PNG。
+
+这两项都已在仓库的 Issues 里建了跟踪条目，完成后会随新版本发布。
