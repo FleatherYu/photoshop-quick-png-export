@@ -328,7 +328,11 @@
 
     function bindEvents() {
         els.prefix.addEventListener("input", function () {
+            // Typing claims the prefix for this document: the 5 s status poll
+            // must never overwrite what the user is editing with the default.
+            state.prefixEdited = true;
             state.prefix = els.prefix.value;
+            setPrefixNote("");
             storeSet(STORAGE_KEYS.prefix, state.prefix);
             schedulePreview();
         });

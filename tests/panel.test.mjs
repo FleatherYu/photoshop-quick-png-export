@@ -62,3 +62,19 @@ test("panel UI carries the required labels and behaviours", () => {
   // No overwrite is enforced by the host: the panel must never send a name.
   assert.equal(/exportPng[\s\S]{0,200}?fileName/.test(panel), false);
 });
+
+test("typing a prefix stops the document-name default from being re-applied", () => {
+  // Regression: the 5 s status poll re-applied the document name and reverted
+  // whatever the user typed, unless the input handler claims the field first.
+  const inputHandler = /els\.prefix\.addEventListener\("input",\s*function\s*\(\)\s*\{([\s\S]*?)\n\s*\}\);/.exec(panel);
+  assert.ok(inputHandler, "prefix input handler not found");
+  assert.match(inputHandler[1], /state\.prefixEdited\s*=\s*true/);
+
+  const apply = /function applyDocumentPrefix\(result\)\s*\{([\s\S]*?)\n    \}/.exec(panel);
+  assert.ok(apply, "applyDocumentPrefix not found");
+  assert.match(apply[1], /state\.prefixEdited/);
+
+  const refresh = /function refreshDocument\(\)\s*\{([\s\S]*?)\n    \}/.exec(panel);
+  assert.ok(refresh, "refreshDocument not found");
+  assert.match(refresh[1], /result\.name !== state\.lastDocName/);
+});

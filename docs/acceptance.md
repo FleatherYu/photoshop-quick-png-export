@@ -12,7 +12,7 @@ node scripts/build-host.mjs                                   # 生成 jsx/host.
 node --test --test-isolation=none "tests/*.test.mjs"
 ```
 
-结果：**49 项测试全部通过**（0 失败）。覆盖：
+结果：**52 项测试全部通过**（0 失败）。覆盖：
 
 - 前缀校验：空、首尾空白（含全角空格/不换行空格）、非法字符、结尾句点、超长、中文与内部空格；
 - 默认前缀：文档名去扩展名（`.psd/.png/...`，不误伤 `poster.v2`）、删除 Windows 非法字符、去首尾空白与结尾句点、超长截断、缺名安全，且清洗结果永远能通过 `validatePrefix`；
@@ -68,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-photoshop.ps1
 > 透明说明：上表是**修复中文文件名问题之后**的完整运行（24/24）。此后做了一次等价
 > 重构——把 `decodePercentName` 从宿主层移进 `matchSequence`，让 preview/export 共用
 > 同一处解码。重构后的真实 Photoshop 复跑因本机用户当时正打开并编辑一个 PSD 文档，
-> 被上面的安全保护跳过（不是失败）；该路径由 49 项 Node 测试覆盖，包含对
+> 被上面的安全保护跳过（不是失败）；该路径由 52 项 Node 测试覆盖，包含对
 > `QPE-%E6%B5%8B%E8%AF%95-05.png` 的解码匹配断言。关闭 Photoshop 里的文档后，
 > 直接重跑验收脚本即可复核。
 
@@ -111,6 +111,12 @@ Close them and rerun this script so your work is never touched.
 3. **验收脚本中文乱码**（脚本问题）：Windows PowerShell 5.1 把无 BOM 的 UTF-8 `.ps1`
    按 ANSI 读，中文变乱码。脚本改成纯 ASCII，中文用 `[char]0xXXXX` 构造，
    ExtendScript 里用 `\uXXXX` 转义。
+4. **手动输入的前缀被自动改回文档名**（真实缺陷，用户反馈）：默认前缀上线后，
+   `js/panel.js` 的前缀 `input` 监听只更新值、没有把「用户已手动编辑」标记置位，
+   于是每 5 秒的文档状态轮询仍会执行默认前缀填充，把刚输入的内容覆盖回文档名。
+   修复：`input` 事件里设置 `state.prefixEdited = true`；同时新增
+   `tests/panel-behavior.test.mjs`，用 vm + 手写 DOM 跑真实面板脚本：输入后触发
+   轮询回调，断言前缀保持不变（52 项测试）。
 
 ## 4. 未验证 / 需要人工确认
 

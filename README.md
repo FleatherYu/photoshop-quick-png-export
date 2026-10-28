@@ -24,7 +24,7 @@ photoshop-quick-png-export/
 ├─ scripts/install.ps1      安装到 CEP 扩展目录
 ├─ scripts/uninstall.ps1    卸载
 ├─ scripts/verify-photoshop.ps1  真实 Photoshop 验收（COM 驱动，24 项检查）
-├─ tests/                   node:test 测试（49 项）
+├─ tests/                   node:test 测试（52 项）
 └─ docs/                    设计说明与人工验收记录
 ```
 
@@ -118,9 +118,10 @@ node --test --test-isolation=none "tests/*.test.mjs"
 
 - `node --test` 默认给每个测试文件起子进程，在受限沙箱里会 `spawn EPERM`，
   所以加了 `--test-isolation=none`（在同一个进程内跑）。
-- 49 项测试覆盖：前缀校验、默认前缀取自文档名（去扩展名、清洗非法字符）、补零/不截断、
+- 52 项测试覆盖：前缀校验、默认前缀取自文档名（去扩展名、清洗非法字符）、补零/不截断、
   正则转义、大小写、取最大值+1、不复用空洞、不同前缀独立、中文文件名的百分号编码解码、
-  ASCII-only JSON、`host.jsx` 与源码一致性、清单结构、面板 DOM id/脚本/样式一致性。
+  ASCII-only JSON、`host.jsx` 与源码一致性、清单结构、面板 DOM id/脚本/样式一致性，
+  以及面板状态机（手动输入前缀后，5 秒文档轮询不会把前缀改回默认值）。
 
 Photoshop 里的真实导出流程用 COM 验收（需要本机装有 Photoshop，且**关掉其他文档**；
 脚本检测到有用户文档时会打印 `SKIP` 并以非 0 退出，绝不碰你的工作）：
