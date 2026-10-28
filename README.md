@@ -1,8 +1,14 @@
-# Photoshop Photoshop Quick PNG Export
+# Photoshop Quick PNG Export
 
 Photoshop PNG 导出面板，按 `前缀-编号.png` 保存当前文档，或把当前选中的图层 / 图层组批量导出成多张 PNG。导出时读取目标文件夹中的已有编号，接续保存，避免覆盖同名文件。
 
 支持透明背景、中文前缀和编号位数设置，并记住输出目录与上次使用的前缀。
+
+## 界面
+
+| 整张画面模式 | 选中图层模式 |
+| --- | --- |
+| <img src="docs/images/panel-document-mode.png" width="270" alt="整张画面模式：按前缀-编号导出当前文档"> | <img src="docs/images/panel-selection-mode.png" width="500" alt="选中图层模式：批量导出选中的图层/组"> |
 
 ## 安装
 

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 title Photoshop Quick PNG Export - install
-echo Installing the Photoshop Quick PNG Export panel for Photoshop CC 2019+ ...
+echo Installing Photoshop Quick PNG Export for Photoshop CC 2019+ ...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1"
 if errorlevel 1 (
