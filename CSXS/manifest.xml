@@ -7,7 +7,7 @@
 <ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.fleatheryu.pngsmartexport"
                    ExtensionBundleVersion="1.1.0"
-                   ExtensionBundleName="PNG Smart Export">
+                   ExtensionBundleName="Photoshop Quick PNG Export">
 
     <ExtensionList>
         <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.1.0" />
@@ -34,7 +34,7 @@
                 </Lifecycle>
                 <UI>
                     <Type>Panel</Type>
-                    <Menu>PNG Smart Export</Menu>
+                    <Menu>Photoshop Quick PNG Export</Menu>
                     <Geometry>
                         <Size>
                             <Height>360</Height>

@@ -1,4 +1,4 @@
-# PNG Smart Export - uninstaller for Windows.
+# Photoshop Quick PNG Export - uninstaller for Windows.
 #
 # Removes the copied extension folder. The PlayerDebugMode registry value is
 # left untouched because other unsigned development panels may rely on it;

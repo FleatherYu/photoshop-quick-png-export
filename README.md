@@ -1,4 +1,4 @@
-# Photoshop PNG Smart Export
+# Photoshop Photoshop Quick PNG Export
 
 Photoshop PNG 导出面板，按 `前缀-编号.png` 保存当前文档，或把当前选中的图层 / 图层组批量导出成多张 PNG。导出时读取目标文件夹中的已有编号，接续保存，避免覆盖同名文件。
 
@@ -6,12 +6,12 @@ Photoshop PNG 导出面板，按 `前缀-编号.png` 保存当前文档，或把
 
 ## 安装
 
-Windows 安装包：[下载最新版本](https://github.com/FleatherYu/photoshop-png-smart-export/releases/latest)。
+Windows 安装包：[下载最新版本](https://github.com/FleatherYu/photoshop-quick-png-export/releases/latest)。
 
-1. 下载并解压 `photoshop-png-smart-export-v版本号.zip`。
+1. 下载并解压 `photoshop-quick-png-export-v版本号.zip`。
 2. 运行解压目录中的 `install.cmd`，等待窗口显示 `Done.`。
 3. 完全退出并重新启动 Photoshop。
-4. 从「窗口 → 扩展功能 → PNG Smart Export」打开面板。
+4. 从「窗口 → 扩展功能 → Photoshop Quick PNG Export」打开面板。
 
 安装脚本将面板复制到以下用户目录，并启用加载未签名 CEP 面板所需的 `PlayerDebugMode`：
 

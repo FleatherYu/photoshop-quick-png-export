@@ -1,7 +1,7 @@
 @echo off
 setlocal
-title PNG Smart Export - install
-echo Installing the PNG Smart Export panel for Photoshop CC 2019+ ...
+title Photoshop Quick PNG Export - install
+echo Installing the Photoshop Quick PNG Export panel for Photoshop CC 2019+ ...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\install.ps1"
 if errorlevel 1 (
@@ -10,7 +10,7 @@ if errorlevel 1 (
 ) else (
     echo.
     echo Done. Fully quit and reopen Photoshop, then open:
-    echo   Window ^> Extensions ^> PNG Smart Export
+    echo   Window ^> Extensions ^> Photoshop Quick PNG Export
 )
 echo.
 pause

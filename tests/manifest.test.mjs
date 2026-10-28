@@ -165,7 +165,7 @@ test("panel MainPath and ScriptPath point at shipped files", () => {
 test("panel UI is a dockable Panel with Chinese menu label", () => {
   const ui = find(root, "UI");
   assert.equal(find(ui, "Type").text.trim(), "Panel");
-  assert.equal(find(ui, "Menu").text.trim(), "PNG Smart Export");
+  assert.equal(find(ui, "Menu").text.trim(), "Photoshop Quick PNG Export");
   assert.ok(Number(find(ui, "Height").text) > 0);
   assert.ok(Number(find(ui, "Width").text) > 0);
 });

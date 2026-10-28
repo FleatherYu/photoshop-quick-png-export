@@ -1,7 +1,7 @@
 @echo off
 setlocal
-title PNG Smart Export - uninstall
-echo Removing the PNG Smart Export panel ...
+title Photoshop Quick PNG Export - uninstall
+echo Removing the Photoshop Quick PNG Export panel ...
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\uninstall.ps1"
 if errorlevel 1 (

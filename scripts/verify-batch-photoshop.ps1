@@ -1,4 +1,4 @@
-# PNG Smart Export - real acceptance run for the batch (selected layers) export.
+# Photoshop Quick PNG Export - real acceptance run for the batch (selected layers) export.
 #
 # Drives Photoshop over COM: loads jsx/host.jsx, then runs
 # tests/photoshop/batch-acceptance.jsx in the same ExtendScript engine. The
