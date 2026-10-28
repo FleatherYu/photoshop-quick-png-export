@@ -7,6 +7,11 @@
 - 平台：Windows（安装脚本是 PowerShell；面板本身跨平台，但未在 macOS 实测）。
 - 依赖：无。测试用 Node 内建 `node:test`，不需要 `npm install`。
 
+## 下载
+
+推荐直接从 [Releases](https://github.com/FleatherYu/photoshop-quick-png-export/releases/latest)
+下载打包好的 ZIP，解压后双击 `install.cmd` 即可（见下方「安装」）。
+
 ## 目录结构
 
 ```
