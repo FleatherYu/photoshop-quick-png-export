@@ -256,3 +256,63 @@ test("host.jsx loads in a bare context and dispatches safely", () => {
   assert.equal(badArgs.ok, false);
   assert.equal(badArgs.code, "BAD_ARGS");
 });
+
+/* ---------- default prefix from the document name ---------- */
+
+test("derivePrefixFromDocument strips a document extension", () => {
+  const result = core.derivePrefixFromDocument("2610-10-狼场景.psd");
+  assert.equal(result.prefix, "2610-10-狼场景");
+  assert.equal(result.changed, false);
+  assert.equal(result.documentName, "2610-10-狼场景.psd");
+});
+
+test("derivePrefixFromDocument strips typical extensions only", () => {
+  assert.equal(core.derivePrefixFromDocument("poster.png").prefix, "poster");
+  assert.equal(core.derivePrefixFromDocument("poster.PSD").prefix, "poster");
+  assert.equal(core.derivePrefixFromDocument("poster.v2").prefix, "poster.v2");
+  assert.equal(core.derivePrefixFromDocument("poster").prefix, "poster");
+  assert.equal(core.derivePrefixFromDocument("").prefix, "");
+});
+
+test("derivePrefixFromDocument removes characters Windows forbids", () => {
+  const result = core.derivePrefixFromDocument("a/b:c*d?e\"f<g>h|i\\j.psd");
+  assert.equal(result.prefix, "abcdefghij");
+  assert.equal(result.changed, true);
+});
+
+test("derivePrefixFromDocument cleans edges and keeps inner dots and spaces", () => {
+  const result = core.derivePrefixFromDocument("  a.b c.psd ");
+  assert.equal(result.prefix, "a.b c");
+  assert.equal(result.changed, false);
+});
+
+test("derivePrefixFromDocument never ends with a dot after cleanup", () => {
+  assert.equal(core.derivePrefixFromDocument("name...psd").prefix, "name");
+  assert.equal(core.derivePrefixFromDocument("a/b.").prefix, "ab");
+});
+
+test("derivePrefixFromDocument survives a missing name", () => {
+  for (const value of [null, undefined, "", "   "]) {
+    const result = core.derivePrefixFromDocument(value);
+    assert.equal(typeof result.prefix, "string");
+    assert.equal(result.prefix, "");
+  }
+});
+
+test("derivePrefixFromDocument output always passes validatePrefix", () => {
+  const samples = [
+    "2610-10-狼场景.psd",
+    "a/b:c*d?e\"f<g>h|i\\j.psd",
+    "  260-12 海报 终稿.psd  ",
+    "name...psd",
+    "x".repeat(200) + ".psd"
+  ];
+  for (const name of samples) {
+    const { prefix } = core.derivePrefixFromDocument(name);
+    if (prefix === "") {
+      continue;
+    }
+    assert.equal(core.validatePrefix(prefix).ok, true, name);
+  }
+});
+

@@ -200,6 +200,9 @@ var QPE = (function () {
             };
         }
         var info = describeDocument(app.activeDocument);
+        var suggestion = QPECore.derivePrefixFromDocument(info.name);
+        info.suggestedPrefix = suggestion.prefix;
+        info.suggestedAdjusted = suggestion.changed;
         info.ok = true;
         return info;
     }

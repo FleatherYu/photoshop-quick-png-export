@@ -255,6 +255,15 @@ var CEPBridge = (function () {
         };
     }
 
+    function mockSuggestPrefix(name) {
+        var base = String(name).replace(/\.[A-Za-z0-9]{1,5}$/, "");
+        var cleaned = base.replace(/[\\/:*?"<>|]/g, "").replace(/^\s+|\s+$/g, "");
+        return {
+            prefix: cleaned,
+            changed: cleaned !== base
+        };
+    }
+
     function mockDispatch(method, args) {
         if (method === "status") {
             if (!mockDocOpen) {
@@ -264,6 +273,7 @@ var CEPBridge = (function () {
                     message: "当前没有打开任何 Photoshop 文档"
                 };
             }
+            var suggestion = mockSuggestPrefix(mockDoc.name);
             return {
                 ok: true,
                 hasDocument: true,
@@ -274,7 +284,9 @@ var CEPBridge = (function () {
                 bitDepth: mockDoc.bitDepth,
                 layerCount: mockDoc.layerCount,
                 saved: mockDoc.saved,
-                path: mockDoc.path
+                path: mockDoc.path,
+                suggestedPrefix: suggestion.prefix,
+                suggestedAdjusted: suggestion.changed
             };
         }
         if (method === "preview") {

@@ -25,7 +25,9 @@
         busy: false,
         previewToken: 0,
         previewTimer: 0,
-        lastPath: ""
+        lastPath: "",
+        lastDocName: null,
+        prefixEdited: false
     };
 
     function byId(id) {
@@ -71,6 +73,14 @@
         els.nextHint.className = "hint" + (kind ? " " + kind : "");
     }
 
+    // One-line note under the prefix field: only used when the document name
+    // had to be cleaned up, so automatic filling is never silently surprising.
+    function setPrefixNote(text, kind) {
+        els.prefixNote.textContent = text || "";
+        els.prefixNote.className = "hint" + (kind ? " " + kind : "") +
+            (text ? "" : " hidden");
+    }
+
     function renderDigits() {
         var buttons = els.digits.querySelectorAll("button");
         for (var i = 0; i < buttons.length; i++) {
@@ -87,6 +97,28 @@
 
     /* ---------- document status ---------- */
 
+    // Fills the prefix with the active document's name (without extension) so
+    // the usual case is: open document -> pick folder -> export. It only fills
+    // automatically while the user has not typed a prefix for this document;
+    // switching to another document starts that default over again.
+    function applyDocumentPrefix(result) {
+        if (!result.suggestedPrefix || state.prefixEdited) {
+            return;
+        }
+        if (state.prefix === result.suggestedPrefix) {
+            return;
+        }
+        state.prefix = result.suggestedPrefix;
+        els.prefix.value = state.prefix;
+        storeSet(STORAGE_KEYS.prefix, state.prefix);
+        if (result.suggestedAdjusted) {
+            setPrefixNote("已按文档名自动填入，并去掉了文件名不允许的字符。", "warn");
+        } else {
+            setPrefixNote("");
+        }
+        updatePreview();
+    }
+
     function refreshDocument() {
         CEPBridge.call("status", {}, function (result) {
             if (!result.ok) {
@@ -97,6 +129,7 @@
             if (!result.hasDocument) {
                 els.docInfo.textContent = "当前没有打开的文档";
                 els.docInfo.className = "doc-info warn";
+                state.lastDocName = null;
                 return;
             }
             els.docInfo.textContent =
@@ -104,6 +137,14 @@
                 result.mode + " · " + result.bitDepth + " 位";
             els.docInfo.className = "doc-info";
             els.docInfo.title = result.saved ? "文档已保存" : "文档有未保存的修改";
+
+            if (result.name !== state.lastDocName) {
+                // New / different document: the default prefix applies again.
+                state.lastDocName = result.name;
+                state.prefixEdited = false;
+                setPrefixNote("");
+            }
+            applyDocumentPrefix(result);
         });
     }
 
@@ -333,6 +374,7 @@
 
     function init() {
         els.prefix = byId("prefix");
+        els.prefixNote = byId("prefix-note");
         els.digits = byId("digits");
         els.folderPath = byId("folder-path");
         els.pick = byId("pick-folder");

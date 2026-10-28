@@ -17,11 +17,14 @@
  *   computeNext(fileNames, prefix, caseInsensitive)  -> {nextNumber, maxNumber, existingCount}
  *   computeExport(fileNames, prefix, digits, caseInsensitive) -> {nextNumber, maxNumber, existingCount, fileName}
  *   escapeRegExp(text)                        -> string
+ *   derivePrefixFromDocument(docName)         -> {prefix, changed, documentName}
  *   toJson(value)                             -> ASCII-only JSON string (safe for evalScript)
  */
 
 var QPECore = (function () {
     var ILLEGAL_CHARS = ["\\", "/", ":", "*", "?", "\"", "<", ">", "|"];
+    var DOCUMENT_EXTENSIONS = ["psd", "psb", "png", "jpg", "jpeg", "gif", "bmp",
+        "tif", "tiff", "webp", "pdf"];
     var MAX_PREFIX_LENGTH = 120;
     var VALID_DIGITS = [1, 2, 3];
 
@@ -89,6 +92,52 @@ var QPECore = (function () {
             return null;
         }
         return number;
+    }
+
+    /* ---------- document name -> prefix ---------- */
+
+    function stripDocumentExtension(name) {
+        var text = trimText(name);
+        var dot = text.lastIndexOf(".");
+        if (dot > 0) {
+            var ext = text.substring(dot + 1).toLowerCase();
+            // Strip a known document extension only, never a dot that is part
+            // of the document name itself (e.g. "poster.v2").
+            if (indexOfValue(DOCUMENT_EXTENSIONS, ext) !== -1) {
+                return text.substring(0, dot);
+            }
+        }
+        return text;
+    }
+
+    // Turns a Photoshop document name into a default prefix:
+    //   "2610-10-狼场景.psd" -> "2610-10-狼场景"
+    // Windows-illegal characters are removed (the panel explains that it did)
+    // instead of being silently replaced with something else.
+    function derivePrefixFromDocument(docName) {
+        var raw = (docName === null || docName === undefined) ? "" : String(docName);
+        var base = stripDocumentExtension(raw);
+        var cleaned = "";
+        for (var i = 0; i < base.length; i++) {
+            var ch = base.charAt(i);
+            var code = base.charCodeAt(i);
+            if (code < 32 || indexOfValue(ILLEGAL_CHARS, ch) !== -1) {
+                continue;
+            }
+            cleaned += ch;
+        }
+        cleaned = trimText(cleaned);
+        while (cleaned.length > 0 && cleaned.charAt(cleaned.length - 1) === ".") {
+            cleaned = trimText(cleaned.substring(0, cleaned.length - 1));
+        }
+        if (cleaned.length > MAX_PREFIX_LENGTH) {
+            cleaned = trimText(cleaned.substring(0, MAX_PREFIX_LENGTH));
+        }
+        return {
+            prefix: cleaned,
+            changed: cleaned !== base,
+            documentName: raw
+        };
     }
 
     /* ---------- prefix validation ---------- */
@@ -312,6 +361,8 @@ var QPECore = (function () {
         MAX_PREFIX_LENGTH: MAX_PREFIX_LENGTH,
         trimText: trimText,
         decodePercentName: decodePercentName,
+        derivePrefixFromDocument: derivePrefixFromDocument,
+        stripDocumentExtension: stripDocumentExtension,
         validatePrefix: validatePrefix,
         isValidDigits: isValidDigits,
         padNumber: padNumber,

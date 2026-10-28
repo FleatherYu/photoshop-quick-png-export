@@ -44,11 +44,26 @@ ExtendScript 的 `#include` 在不同 CEP 宿主/路径下解析不可靠，所�
 
 | 方法 | 参数 | 返回要点 |
 | --- | --- | --- |
-| `status` | `{}` | `hasDocument`、文档名/尺寸/颜色模式/位深/是否已保存 |
+| `status` | `{}` | `hasDocument`、文档名/尺寸/颜色模式/位深/是否已保存、`suggestedPrefix`（默认前缀）、`suggestedAdjusted`（是否清洗过） |
 | `preview` | `{prefix, digits, folder}` | `fileName`、`nextNumber`、`maxNumber`、`existingCount`、`folderAvailable`；未选目录时给假设的 `-01` 名 |
 | `exportPng` | `{prefix, digits, folder}` | `fileName`、`fullPath`、`converted`、`warnings`；失败时 `code` + `message` |
 | `pickFolder` | `{current}` | `path`；用户取消返回 `canceled: true`（不是错误） |
 | `openFolder` | `{path}` | 在资源管理器中打开目录 |
+
+## 默认前缀（取自文档名）
+
+产品上「打开文档后直接选目录、点导出」是最常用路径，所以前缀默认不留空：
+
+- 宿主在 `status` 里用 `QPECore.derivePrefixFromDocument(doc.name)` 算出
+  `suggestedPrefix`：去掉已知文档扩展名（`.psd/.png/.jpg/.tif/...`，不误伤
+  `poster.v2` 这类名字），删除 Windows 不允许的字符与控制字符，去掉首尾空白，
+  去掉结尾句点，超长截到 120 字符；`suggestedAdjusted` 标记是否发生过清洗。
+- 面板只在用户**没有手动改过**当前文档的前缀时自动填入；改过之后同一文档内
+  不再覆盖。切换到另一条文档时重新按新文档名填入（`state.prefixEdited` 重置）。
+- 清洗发生时，前缀输入框下方显示一行提示，说明「已按文档名自动填入，并去掉了
+  文件名不允许的字符」，不静默改。
+- 自动填好的前缀仍然走 `validatePrefix` 校验，保证 `derivePrefixFromDocument`
+  的输出永远能直接用于导出（有对应单元测试）。
 
 ## 错误码
 
