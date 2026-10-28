@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Target: CEP 9 = Photoshop CC 2019 (20.x) and newer.
+  Manifest Version 7.0 is the schema CEP 9 understands; newer CEP hosts accept
+  older manifest versions, so this also loads on Photoshop 2020+ without edits.
+-->
+<ExtensionManifest Version="7.0"
+                   ExtensionBundleId="com.fleatheryu.quickpngexport"
+                   ExtensionBundleVersion="0.1.0"
+                   ExtensionBundleName="Quick PNG Export">
+
+    <ExtensionList>
+        <Extension Id="com.fleatheryu.quickpngexport.panel" Version="0.1.0" />
+    </ExtensionList>
+
+    <ExecutionEnvironment>
+        <HostList>
+            <Host Name="PHXS" Version="[20.0,99.9]" />
+        </HostList>
+        <LocaleList>
+            <Locale Code="All" />
+        </LocaleList>
+    </ExecutionEnvironment>
+
+    <DispatchInfoList>
+        <Extension Id="com.fleatheryu.quickpngexport.panel">
+            <DispatchInfo>
+                <Resources>
+                    <MainPath>./index.html</MainPath>
+                    <ScriptPath>./jsx/host.jsx</ScriptPath>
+                </Resources>
+                <Lifecycle>
+                    <AutoVisible>true</AutoVisible>
+                </Lifecycle>
+                <UI>
+                    <Type>Panel</Type>
+                    <Menu>快速 PNG 导出</Menu>
+                    <Geometry>
+                        <Size>
+                            <Height>360</Height>
+                            <Width>300</Width>
+                        </Size>
+                        <MinSize>
+                            <Height>240</Height>
+                            <Width>240</Width>
+                        </MinSize>
+                        <MaxSize>
+                            <Height>900</Height>
+                            <Width>600</Width>
+                        </MaxSize>
+                    </Geometry>
+                </UI>
+            </DispatchInfo>
+        </Extension>
+    </DispatchInfoList>
+</ExtensionManifest>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>快速 PNG 导出</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body class="theme-dark">
+  <div id="mock-note" class="mock-note hidden">
+    未连接 Photoshop：当前是浏览器预览模式，导出结果只在内存中模拟。
+  </div>
+
+  <div class="row">
+    <label class="label" for="prefix">前缀</label>
+    <input id="prefix" type="text" maxlength="120" autocomplete="off" spellcheck="false"
+           placeholder="例如 261028-123">
+  </div>
+
+  <div class="row">
+    <span class="label">位数</span>
+    <div class="seg" id="digits" role="group" aria-label="序号位数">
+      <button type="button" data-digits="1" aria-pressed="false">1 位</button>
+      <button type="button" data-digits="2" aria-pressed="true">2 位</button>
+      <button type="button" data-digits="3" aria-pressed="false">3 位</button>
+    </div>
+  </div>
+
+  <div class="row">
+    <span class="label">输出目录</span>
+    <button type="button" id="pick-folder" class="btn-ghost">选择文件夹…</button>
+  </div>
+  <div class="path" id="folder-path" title="点击复制目录路径">未选择输出文件夹</div>
+
+  <div class="preview">
+    <span class="preview-label">下一个文件</span>
+    <span class="preview-value" id="next-file">—</span>
+  </div>
+  <p class="hint" id="next-hint">填写前缀后这里会显示下一个文件名</p>
+
+  <button type="button" id="export" class="btn-primary">快速导出 PNG</button>
+
+  <div class="status" id="status" role="status" aria-live="polite">就绪。</div>
+
+  <div id="last-export" class="last hidden">
+    <div class="last-head">
+      <span class="last-title">上次导出</span>
+      <button type="button" id="open-folder" class="btn-ghost">打开目录</button>
+      <button type="button" id="copy-path" class="btn-ghost">复制路径</button>
+    </div>
+    <div class="path" id="last-path" title=""></div>
+  </div>
+
+  <div class="doc-info" id="doc-info">正在读取文档…</div>
+
+  <script src="js/cep-bridge.js"></script>
+  <script src="js/panel.js"></script>
+</body>
+</html>

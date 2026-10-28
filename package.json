@@ -1,0 +1,11 @@
+{
+  "name": "photoshop-quick-png-export",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CEP 9 panel for Photoshop CC 2019 that exports the active document as a sequentially numbered PNG.",
+  "scripts": {
+    "build": "node scripts/build-host.mjs",
+    "check": "node scripts/build-host.mjs --check",
+    "test": "node --test --test-isolation=none tests/"
+  }
+}

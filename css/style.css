@@ -1,0 +1,331 @@
+/*
+ * Quick PNG Export - panel styles.
+ *
+ * Compact by design: the panel is docked next to the canvas and every row has
+ * to stay usable at the minimum width (240 px). Dark is the default because
+ * Photoshop's default UI is dark; CEPBridge.applyTheme() swaps to the light
+ * palette when the host reports a light application skin.
+ */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  padding: 10px 10px 12px;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: var(--bg);
+  color: var(--fg);
+  font: 12px/1.4 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+body.theme-dark {
+  --bg: #323232;
+  --panel: #3b3b3b;
+  --input-bg: #272727;
+  --line: #4d4d4d;
+  --hover: #454545;
+  --fg: #d9d9d9;
+  --muted: #9b9b9b;
+  --accent: #2680eb;
+  --accent-fg: #ffffff;
+  --ok: #7ac37a;
+  --error: #ff9d94;
+  --warn: #e8c06a;
+}
+
+body.theme-light {
+  --bg: #f0f0f0;
+  --panel: #e6e6e6;
+  --input-bg: #ffffff;
+  --line: #c4c4c4;
+  --hover: #e0e0e0;
+  --fg: #232323;
+  --muted: #6b6b6b;
+  --accent: #1473e6;
+  --accent-fg: #ffffff;
+  --ok: #2d7d2d;
+  --error: #b3261e;
+  --warn: #8a6100;
+}
+
+/* ---------- rows ---------- */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.label {
+  flex: 0 0 52px;
+  width: 52px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+input[type="text"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--input-bg);
+  color: var(--fg);
+  font: inherit;
+  outline: none;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+input[type="text"]:focus {
+  border-color: var(--accent);
+}
+
+input[type="text"]::placeholder {
+  color: var(--muted);
+}
+
+/* ---------- digit selector ---------- */
+
+.seg {
+  display: flex;
+  flex: 1 1 auto;
+  gap: 4px;
+}
+
+.seg button {
+  flex: 1 1 0;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.seg button:hover {
+  background: var(--hover);
+}
+
+.seg button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ---------- buttons ---------- */
+
+.btn-ghost {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.btn-ghost:hover:enabled {
+  background: var(--hover);
+}
+
+.btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-primary {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 2px 0 8px;
+  border: none;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.btn-primary:hover:enabled {
+  filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---------- paths, preview, status ---------- */
+
+.path {
+  margin: -2px 0 8px 58px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.path.placeholder {
+  font-style: italic;
+}
+
+.path.warn {
+  color: var(--warn);
+}
+
+.preview {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 2px;
+}
+
+.preview-label {
+  flex: 0 0 52px;
+  width: 52px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.preview-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hint {
+  margin: 0 0 8px 58px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.hint.warn {
+  color: var(--warn);
+}
+
+.hint.placeholder {
+  font-style: italic;
+}
+
+.status {
+  min-height: 38px;
+  box-sizing: border-box;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.status.ok {
+  border-color: var(--ok);
+}
+
+.status.error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.status.busy {
+  border-color: var(--accent);
+}
+
+/* ---------- last export ---------- */
+
+.last {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+}
+
+.last-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.last-title {
+  flex: 1 1 auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.last .path {
+  margin: 0;
+  color: var(--fg);
+  cursor: default;
+  white-space: normal;
+  word-break: break-all;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ---------- footer ---------- */
+
+.doc-info {
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  word-break: break-all;
+}
+
+.doc-info.warn {
+  color: var(--warn);
+}
+
+.mock-note {
+  margin-bottom: 8px;
+  padding: 5px 7px;
+  border: 1px dashed var(--warn);
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.hidden {
+  display: none !important;
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

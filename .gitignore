@@ -1,0 +1,6 @@
+# 验收/调试产生的临时文件（真实导出、CEP 安装演练等）
+.tmp/
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
