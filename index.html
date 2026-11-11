@@ -30,6 +30,20 @@
   </div>
 
   <div class="row">
+    <span class="label">格式</span>
+    <div class="seg" id="format" role="group" aria-label="导出格式">
+      <button type="button" data-format="png" aria-pressed="true">PNG</button>
+      <button type="button" data-format="jpg" aria-pressed="false">JPG</button>
+    </div>
+  </div>
+
+  <div class="row hidden" id="quality-row">
+    <label class="label" for="quality">质量</label>
+    <input id="quality" class="quality-slider" type="range" min="0" max="12" step="1" value="10">
+    <span class="quality-value" id="quality-value">10</span>
+  </div>
+
+  <div class="row">
     <label class="label" for="prefix">前缀</label>
     <input id="prefix" type="text" maxlength="120" autocomplete="off" spellcheck="false"
            placeholder="例如 261028-123">
@@ -50,12 +64,18 @@
     <button type="button" id="pick-folder" class="btn-ghost">选择文件夹…</button>
   </div>
   <div class="path" id="folder-path" title="点击复制目录路径">未选择输出文件夹</div>
+  <p class="hint hidden" id="folder-source"></p>
 
   <div class="preview">
     <span class="preview-label">导出名称</span>
     <span class="preview-value" id="next-file">—</span>
   </div>
   <p class="hint" id="next-hint">填写前缀后这里会显示导出名称</p>
+
+  <div class="preview" id="estimate-row">
+    <span class="preview-label">预计大小</span>
+    <span class="preview-value" id="estimate-value">—</span>
+  </div>
 
   <button type="button" id="export" class="btn-primary">快速导出 PNG</button>
 
@@ -74,6 +94,28 @@
     </div>
     <div class="path" id="last-path" title=""></div>
   </div>
+
+  <details id="settings" class="settings">
+    <summary>设置</summary>
+    <div class="settings-body">
+      <div class="row">
+        <span class="label">编号策略</span>
+        <div class="seg" id="numbering" role="group" aria-label="编号策略">
+          <button type="button" data-numbering="shared" aria-pressed="true">共用序列</button>
+          <button type="button" data-numbering="separate" aria-pressed="false">按格式分开</button>
+        </div>
+      </div>
+      <p class="hint settings-hint">共用序列让 PNG 与 JPG 接着同一个序号往后排；按格式分开则各自计数。</p>
+      <div class="row">
+        <span class="label">输出目录</span>
+        <div class="seg" id="folder-mode" role="group" aria-label="默认输出目录">
+          <button type="button" data-folder-mode="document" aria-pressed="true">跟随文档</button>
+          <button type="button" data-folder-mode="last" aria-pressed="false">记住上次</button>
+        </div>
+      </div>
+      <p class="hint settings-hint">跟随文档：打开已保存的文档时自动使用它所在的文件夹；记住上次：沿用上次导出用过的文件夹。</p>
+    </div>
+  </details>
 
   <div class="doc-info" id="doc-info">正在读取文档…</div>
 

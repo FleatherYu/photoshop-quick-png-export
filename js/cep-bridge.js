@@ -27,9 +27,12 @@ var CEPBridge = (function () {
         mode: "RGB",
         bitDepth: 8,
         layerCount: 6,
-        saved: false,
-        path: ""
+        saved: true,
+        path: MOCK_FOLDER
     };
+    // Pre-existing files so the shared / per-format numbering strategies are
+    // visibly different in the browser preview.
+    mockFileNames[MOCK_FOLDER] = ["示例海报-01.png", "示例海报-03.jpg"];
     // Fixed fake selection: two plain layers and one group. The mock skips the
     // group as fully transparent so the panel's partial-result path is visible
     // in a browser preview without touching Photoshop.
@@ -159,6 +162,19 @@ var CEPBridge = (function () {
         return text;
     }
 
+    function mockFormat(args) {
+        var value = String(args.format || "").toLowerCase();
+        return (value === "jpg" || value === "jpeg") ? "jpg" : "png";
+    }
+
+    function mockNumbering(args) {
+        return String(args.numbering || "") === "separate" ? "separate" : "shared";
+    }
+
+    function mockExtension(format) {
+        return format === "jpg" ? ".jpg" : ".png";
+    }
+
     function mockFiles(folderPath) {
         if (!mockFileNames[folderPath]) {
             mockFileNames[folderPath] = [];
@@ -166,9 +182,19 @@ var CEPBridge = (function () {
         return mockFileNames[folderPath];
     }
 
-    function mockScan(prefix, digits) {
+    // Mirrors QPECore.buildMatcher: shared counts PNG and JPG/JPEG together,
+    // separate counts only the extension of the format being exported.
+    function mockExtensionPattern(format, numbering) {
+        if (numbering === "shared") {
+            return "png|jpe?g";
+        }
+        return format === "jpg" ? "jpe?g" : "png";
+    }
+
+    function mockScan(prefix, digits, format, numbering) {
         var escaped = prefix.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
-        var matcher = new RegExp("^" + escaped + "-(\\d+)\\.png$", "i");
+        var matcher = new RegExp("^" + escaped + "-(\\d+)\\.(" +
+            mockExtensionPattern(format, numbering) + ")$", "i");
         var names = mockFiles(MOCK_FOLDER);
         var maxNumber = 0;
         var count = 0;
@@ -183,11 +209,26 @@ var CEPBridge = (function () {
             }
         }
         return {
-            fileName: prefix + "-" + mockPad(maxNumber + 1, digits) + ".png",
+            fileName: prefix + "-" + mockPad(maxNumber + 1, digits) + mockExtension(format),
             nextNumber: maxNumber + 1,
             maxNumber: maxNumber,
             existingCount: count
         };
+    }
+
+    function mockQualityError(args) {
+        if (mockFormat(args) !== "jpg") {
+            return null;
+        }
+        var quality = Number(args.quality);
+        if (!isFinite(quality) || Math.floor(quality) !== quality || quality < 0 || quality > 12) {
+            return {
+                ok: false,
+                code: "BAD_QUALITY",
+                message: "JPG 质量必须是 0–12 的整数"
+            };
+        }
+        return null;
     }
 
     function mockPreview(args) {
@@ -199,11 +240,13 @@ var CEPBridge = (function () {
                 message: "请输入文件名前缀"
             };
         }
+        var format = mockFormat(args);
+        var numbering = mockNumbering(args);
         var digits = Number(args.digits) || 2;
         if (!args.folder) {
             return {
                 ok: true,
-                fileName: prefix + "-" + mockPad(1, digits) + ".png",
+                fileName: prefix + "-" + mockPad(1, digits) + mockExtension(format),
                 nextNumber: 1,
                 maxNumber: 0,
                 existingCount: 0,
@@ -217,7 +260,7 @@ var CEPBridge = (function () {
                 message: "输出文件夹不存在或无法访问：" + args.folder
             };
         }
-        var scan = mockScan(prefix, digits);
+        var scan = mockScan(prefix, digits, format, numbering);
         scan.ok = true;
         scan.folderAvailable = true;
         return scan;
@@ -231,6 +274,10 @@ var CEPBridge = (function () {
                 message: "请先打开一个 Photoshop 文档"
             };
         }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
         var previewResult = mockPreview(args);
         if (!previewResult.ok) {
             return previewResult;
@@ -239,7 +286,7 @@ var CEPBridge = (function () {
             return {
                 ok: false,
                 code: "NO_FOLDER",
-                message: "请选择 PNG 输出文件夹"
+                message: "请选择输出文件夹"
             };
         }
         if (args.folder !== MOCK_FOLDER) {
@@ -250,6 +297,7 @@ var CEPBridge = (function () {
             };
         }
         mockFiles(MOCK_FOLDER).push(previewResult.fileName);
+        mockDoc.saved = true;
         return {
             ok: true,
             fileName: previewResult.fileName,
@@ -257,9 +305,41 @@ var CEPBridge = (function () {
             number: previewResult.nextNumber,
             maxNumber: previewResult.maxNumber,
             existingCount: previewResult.existingCount,
+            format: mockFormat(args),
+            quality: mockFormat(args) === "jpg" ? Number(args.quality) : null,
             converted: false,
             warnings: [],
             document: mockDoc.name
+        };
+    }
+
+    // Deterministic estimate so the panel's byte formatting is visible in a
+    // browser preview: PNG is large, JPG grows with the quality setting.
+    function mockEstimate(args) {
+        if (!mockDocOpen) {
+            return {
+                ok: false,
+                code: "NO_DOCUMENT",
+                message: "请先打开一个 Photoshop 文档"
+            };
+        }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
+        var format = mockFormat(args);
+        var pixels = mockDoc.width * mockDoc.height;
+        var bytes;
+        if (format === "jpg") {
+            bytes = Math.round(pixels * (0.02 + (Number(args.quality) || 10) * 0.016));
+        } else {
+            bytes = Math.round(pixels * 1.3);
+        }
+        return {
+            ok: true,
+            format: format,
+            quality: format === "jpg" ? Number(args.quality) : null,
+            bytes: bytes
         };
     }
 
@@ -281,6 +361,12 @@ var CEPBridge = (function () {
                 message: "请输入文件名前缀"
             };
         }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
+        var format = mockFormat(args);
+        var numbering = mockNumbering(args);
         var digits = Number(args.digits) || 2;
         var folderAvailable = false;
         var start = 1;
@@ -294,7 +380,7 @@ var CEPBridge = (function () {
                     message: "输出文件夹不存在或无法访问：" + args.folder
                 };
             }
-            var scan = mockScan(prefix, digits);
+            var scan = mockScan(prefix, digits, format, numbering);
             start = scan.nextNumber;
             maxNumber = scan.maxNumber;
             existingCount = scan.existingCount;
@@ -306,7 +392,7 @@ var CEPBridge = (function () {
                 id: MOCK_SELECTION[i].id,
                 name: MOCK_SELECTION[i].name,
                 isGroup: MOCK_SELECTION[i].isGroup,
-                expectedFileName: prefix + "-" + mockPad(start + i, digits) + ".png"
+                expectedFileName: prefix + "-" + mockPad(start + i, digits) + mockExtension(format)
             };
         }
         return {
@@ -321,6 +407,7 @@ var CEPBridge = (function () {
             startNumber: start,
             maxNumber: maxNumber,
             existingCount: existingCount,
+            format: format,
             warnings: []
         };
     }
@@ -341,12 +428,18 @@ var CEPBridge = (function () {
                 message: "请输入文件名前缀"
             };
         }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
+        var format = mockFormat(args);
+        var numbering = mockNumbering(args);
         var digits = Number(args.digits) || 2;
         if (!args.folder) {
             return {
                 ok: false,
                 code: "NO_FOLDER",
-                message: "请选择 PNG 输出文件夹"
+                message: "请选择输出文件夹"
             };
         }
         if (args.folder !== MOCK_FOLDER) {
@@ -363,11 +456,11 @@ var CEPBridge = (function () {
                 message: "当前文档或选中的图层已发生变化，请刷新选择后重试"
             };
         }
-        var scan = mockScan(prefix, digits);
+        var scan = mockScan(prefix, digits, format, numbering);
         var successes = [];
         for (var i = 0; i < 2; i++) {
             var number = scan.nextNumber + i;
-            var fileName = prefix + "-" + mockPad(number, digits) + ".png";
+            var fileName = prefix + "-" + mockPad(number, digits) + mockExtension(format);
             successes[successes.length] = {
                 id: MOCK_SELECTION[i].id,
                 name: MOCK_SELECTION[i].name,
@@ -400,6 +493,7 @@ var CEPBridge = (function () {
             warnings: [],
             cleanupErrors: [],
             document: mockDoc.name,
+            format: format,
             counts: {
                 exported: 2,
                 skipped: 1,
@@ -448,8 +542,15 @@ var CEPBridge = (function () {
         if (method === "preview") {
             return mockPreview(args);
         }
-        if (method === "exportPng") {
+        if (method === "exportImage") {
             return mockExport(args);
+        }
+        if (method === "exportPng") {
+            args.format = "png";
+            return mockExport(args);
+        }
+        if (method === "estimateSize") {
+            return mockEstimate(args);
         }
         if (method === "previewSelectedLayers") {
             return mockPreviewSelected(args);
@@ -480,7 +581,8 @@ var CEPBridge = (function () {
     function mockCall(method, args, callback) {
         window.setTimeout(function () {
             var result = mockDispatch(method, args);
-            if ((method === "exportPng" || method === "exportSelectedLayers") && result.ok) {
+            if ((method === "exportPng" || method === "exportImage" ||
+                method === "exportSelectedLayers") && result.ok) {
                 mockDoc.saved = true;
             }
             callback(result);

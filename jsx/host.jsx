@@ -17,11 +17,17 @@
  *   validatePrefix(raw)                       -> {ok, prefix} | {ok:false, code, message, chars}
  *   isValidDigits(digits)                     -> boolean
  *   padNumber(number, digits)                 -> string (minimum width, never truncated)
- *   buildFileName(prefix, digits, number)     -> "prefix-01.png"
- *   buildMatcher(prefix, caseInsensitive)     -> RegExp ^prefix-(\d+)\.png$
- *   matchSequence(fileName, prefix, caseInsensitive) -> number | null
- *   computeNext(fileNames, prefix, caseInsensitive)  -> {nextNumber, maxNumber, existingCount}
- *   computeExport(fileNames, prefix, digits, caseInsensitive) -> {nextNumber, maxNumber, existingCount, fileName}
+ *   normalizeFormat(value)                    -> "png" | "jpg"
+ *   formatExtension(value)                    -> ".png" | ".jpg"
+ *   normalizeNumbering(value)                 -> "shared" | "separate"
+ *   isValidJpegQuality(value)                 -> boolean (number, integer 0-12)
+ *   normalizeJpegQuality(value)               -> valid quality, default 10
+ *   buildFileName(prefix, digits, number, format) -> "prefix-01.png" / "prefix-01.jpg"
+ *   buildMatcher(prefix, caseInsensitive, options) -> RegExp
+ *       options = {format: "png"|"jpg", numbering: "shared"|"separate"}
+ *   matchSequence(fileName, prefix, caseInsensitive, options) -> number | null
+ *   computeNext(fileNames, prefix, caseInsensitive, options)  -> {nextNumber, maxNumber, existingCount}
+ *   computeExport(fileNames, prefix, digits, caseInsensitive, options) -> {nextNumber, maxNumber, existingCount, fileName}
  *   compareLayerPaths(left, right)            -> number (panel order, top to bottom)
  *   orderSelectedLayers(items, selectedIds)   -> panel-order records, selected ancestors win
  *   buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) -> {startNumber, names, ...}
@@ -37,6 +43,11 @@ var QPECore = (function () {
         "tif", "tiff", "webp", "pdf"];
     var MAX_PREFIX_LENGTH = 120;
     var VALID_DIGITS = [1, 2, 3];
+    var DEFAULT_FORMAT = "png";
+    var DEFAULT_NUMBERING = "shared";
+    var JPEG_QUALITY_MIN = 0;
+    var JPEG_QUALITY_MAX = 12;
+    var DEFAULT_JPEG_QUALITY = 10;
 
     /* ---------- helpers ---------- */
 
@@ -82,18 +93,27 @@ var QPECore = (function () {
         return out;
     }
 
-    function buildMatcher(prefix, caseInsensitive) {
+    function buildMatcher(prefix, caseInsensitive, options) {
+        var format = normalizeFormat(options ? options.format : null);
+        var numbering = normalizeNumbering(options ? options.numbering : null);
+        var extensionPattern;
+        if (numbering === "separate") {
+            extensionPattern = (format === "jpg") ? "jpe?g" : "png";
+        } else {
+            // Shared sequence: PNG and JPG (including .jpeg) count together.
+            extensionPattern = "png|jpe?g";
+        }
         var flags = (caseInsensitive === false) ? "" : "i";
-        return new RegExp("^" + escapeRegExp(prefix) + "-(\\d+)\\.png$", flags);
+        return new RegExp("^" + escapeRegExp(prefix) + "-(\\d+)\\.(" + extensionPattern + ")$", flags);
     }
 
-    function matchSequence(fileName, prefix, caseInsensitive) {
+    function matchSequence(fileName, prefix, caseInsensitive, options) {
         if (!isString(fileName) || !isString(prefix)) {
             return null;
         }
         // ExtendScript percent-encodes non-ASCII File.name values (verified on
         // Photoshop CC 2019), so matching runs on the decoded, readable name.
-        var matched = buildMatcher(prefix, caseInsensitive).exec(decodePercentName(fileName));
+        var matched = buildMatcher(prefix, caseInsensitive, options).exec(decodePercentName(fileName));
         if (!matched) {
             return null;
         }
@@ -216,18 +236,56 @@ var QPECore = (function () {
         return indexOfValue(VALID_DIGITS, value) !== -1;
     }
 
-    /* ---------- sequencing ---------- */
+    /* ---------- format / numbering / JPEG quality ---------- */
 
-    function buildFileName(prefix, digits, number) {
-        return prefix + "-" + padNumber(number, digits) + ".png";
+    function normalizeFormat(value) {
+        if (!isString(value)) {
+            return DEFAULT_FORMAT;
+        }
+        var text = value.toLowerCase();
+        return (text === "jpg" || text === "jpeg") ? "jpg" : DEFAULT_FORMAT;
     }
 
-    function computeNext(fileNames, prefix, caseInsensitive) {
+    function formatExtension(value) {
+        return normalizeFormat(value) === "jpg" ? ".jpg" : ".png";
+    }
+
+    function normalizeNumbering(value) {
+        if (isString(value) && value.toLowerCase() === "separate") {
+            return "separate";
+        }
+        return DEFAULT_NUMBERING;
+    }
+
+    // JPEGSaveOptions.quality accepts an integer 0-12 only. Strings such as
+    // "10" are rejected on purpose: the host payload is JSON-generated, so a
+    // non-number means a caller bug that should fail loudly (BAD_QUALITY).
+    function isValidJpegQuality(value) {
+        if (typeof value !== "number" || !isFinite(value)) {
+            return false;
+        }
+        if (value < JPEG_QUALITY_MIN || value > JPEG_QUALITY_MAX) {
+            return false;
+        }
+        return Math.floor(value) === value;
+    }
+
+    function normalizeJpegQuality(value) {
+        return isValidJpegQuality(value) ? value : DEFAULT_JPEG_QUALITY;
+    }
+
+    /* ---------- sequencing ---------- */
+
+    function buildFileName(prefix, digits, number, format) {
+        return prefix + "-" + padNumber(number, digits) + formatExtension(format);
+    }
+
+    function computeNext(fileNames, prefix, caseInsensitive, options) {
         var maxNumber = 0;
         var existingCount = 0;
         var names = fileNames || [];
         for (var i = 0; i < names.length; i++) {
-            var number = matchSequence(names[i], prefix, caseInsensitive);
+            var number = matchSequence(names[i], prefix, caseInsensitive, options);
             if (number !== null) {
                 existingCount++;
                 if (number > maxNumber) {
@@ -242,13 +300,13 @@ var QPECore = (function () {
         };
     }
 
-    function computeExport(fileNames, prefix, digits, caseInsensitive) {
-        var next = computeNext(fileNames, prefix, caseInsensitive);
+    function computeExport(fileNames, prefix, digits, caseInsensitive, options) {
+        var next = computeNext(fileNames, prefix, caseInsensitive, options);
         return {
             nextNumber: next.nextNumber,
             maxNumber: next.maxNumber,
             existingCount: next.existingCount,
-            fileName: buildFileName(prefix, digits, next.nextNumber)
+            fileName: buildFileName(prefix, digits, next.nextNumber, options ? options.format : null)
         };
     }
 
@@ -321,15 +379,15 @@ var QPECore = (function () {
     // Expected names for the next `count` exports. This is only a plan: the
     // host re-scans the folder before every save, so skipped objects do not
     // consume a number.
-    function buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) {
-        var next = computeNext(fileNames, prefix, caseInsensitive);
+    function buildBatchNames(fileNames, prefix, digits, count, caseInsensitive, options) {
+        var next = computeNext(fileNames, prefix, caseInsensitive, options);
         var total = 0;
         if (typeof count === "number" && isFinite(count) && count > 0) {
             total = Math.floor(count);
         }
         var names = [];
         for (var i = 0; i < total; i++) {
-            names[i] = buildFileName(prefix, digits, next.nextNumber + i);
+            names[i] = buildFileName(prefix, digits, next.nextNumber + i, options ? options.format : null);
         }
         return {
             startNumber: next.nextNumber,
@@ -474,6 +532,11 @@ var QPECore = (function () {
     return {
         ILLEGAL_CHARS: ILLEGAL_CHARS,
         MAX_PREFIX_LENGTH: MAX_PREFIX_LENGTH,
+        JPEG_QUALITY_MIN: JPEG_QUALITY_MIN,
+        JPEG_QUALITY_MAX: JPEG_QUALITY_MAX,
+        DEFAULT_JPEG_QUALITY: DEFAULT_JPEG_QUALITY,
+        DEFAULT_FORMAT: DEFAULT_FORMAT,
+        DEFAULT_NUMBERING: DEFAULT_NUMBERING,
         trimText: trimText,
         decodePercentName: decodePercentName,
         derivePrefixFromDocument: derivePrefixFromDocument,
@@ -481,6 +544,11 @@ var QPECore = (function () {
         validatePrefix: validatePrefix,
         isValidDigits: isValidDigits,
         padNumber: padNumber,
+        normalizeFormat: normalizeFormat,
+        formatExtension: formatExtension,
+        normalizeNumbering: normalizeNumbering,
+        isValidJpegQuality: isValidJpegQuality,
+        normalizeJpegQuality: normalizeJpegQuality,
         buildFileName: buildFileName,
         buildMatcher: buildMatcher,
         matchSequence: matchSequence,
@@ -510,8 +578,9 @@ if (typeof module !== "undefined" && module.exports) {
  *
  * Entry point used by the panel:
  *   QPE_call(method, argsJson) -> JSON string
- * Methods: status / preview / exportPng / previewSelectedLayers /
- *          exportSelectedLayers / pickFolder / openFolder
+ * Methods: status / preview / exportImage / estimateSize / exportPng (legacy
+ *          PNG-only alias) / previewSelectedLayers / exportSelectedLayers /
+ *          pickFolder / openFolder
  */
 
 var QPE = (function () {
@@ -572,7 +641,7 @@ var QPE = (function () {
     // ExtendScript percent-encodes non-ASCII characters of File.name as UTF-8
     // (verified on Photoshop CC 2019 with Chinese prefixes: "QPE-%E6%B5%8B...").
     // Raw names are kept here; QPECore.matchSequence decodes them before matching.
-    function listPngNames(folder) {
+    function listFileNames(folder) {
         var names = [];
         var entries;
         try {
@@ -692,6 +761,77 @@ var QPE = (function () {
         return info;
     }
 
+    /* ---------- export options shared by preview / export / estimate ---------- */
+
+    function exportFormat(args) {
+        return QPECore.normalizeFormat(args.format);
+    }
+
+    function scanOptions(args) {
+        return {
+            format: QPECore.normalizeFormat(args.format),
+            numbering: QPECore.normalizeNumbering(args.numbering)
+        };
+    }
+
+    function qualityError(format, quality) {
+        if (format !== "jpg") {
+            return null;
+        }
+        if (!QPECore.isValidJpegQuality(quality)) {
+            return fail("BAD_QUALITY", "JPG \u8d28\u91cf\u5fc5\u987b\u662f 0\u201312 \u7684\u6574\u6570");
+        }
+        return null;
+    }
+
+    function saveOptionsFor(format, quality) {
+        if (format === "jpg") {
+            var jpeg = new JPEGSaveOptions();
+            jpeg.quality = QPECore.normalizeJpegQuality(quality);
+            return jpeg;
+        }
+        var png = new PNGSaveOptions();
+        png.interlaced = false;
+        return png;
+    }
+
+    // Finds the next file name that does not exist yet. The numbering rules
+    // live in QPECore so the panel preview and the host always agree.
+    function nextFreeTarget(folder, prefix, digits, caseInsensitive, options) {
+        var fileName = "";
+        var fullPath = "";
+        var number = 0;
+        var maxNumber = 0;
+        var existingCount = 0;
+        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+            var files = listFileNames(folder);
+            var computed = QPECore.computeExport(files, prefix, digits, caseInsensitive, options);
+            number = computed.nextNumber;
+            maxNumber = computed.maxNumber;
+            existingCount = computed.existingCount;
+            fileName = computed.fileName;
+            fullPath = joinPath(folder.fsName, fileName);
+            if (!new File(fullPath).exists) {
+                break;
+            }
+        }
+        if (new File(fullPath).exists) {
+            return {
+                ok: false,
+                code: "COLLISION",
+                message: "\u76ee\u6807\u6587\u4ef6\u5df2\u5b58\u5728\u4e14\u65e0\u6cd5\u81ea\u52a8\u5206\u914d\u5e8f\u53f7\uff1a" + fileName
+            };
+        }
+        return {
+            ok: true,
+            number: number,
+            maxNumber: maxNumber,
+            existingCount: existingCount,
+            fileName: fileName,
+            fullPath: fullPath
+        };
+    }
+
     /* ---------- status ---------- */
 
     function status() {
@@ -727,7 +867,7 @@ var QPE = (function () {
             // called, but flag that the number is not based on a real scan.
             return {
                 ok: true,
-                fileName: QPECore.buildFileName(prefixCheck.prefix, args.digits, 1),
+                fileName: QPECore.buildFileName(prefixCheck.prefix, args.digits, 1, exportFormat(args)),
                 nextNumber: 1,
                 maxNumber: 0,
                 existingCount: 0,
@@ -738,8 +878,8 @@ var QPE = (function () {
         if (!folder) {
             return fail("FOLDER_MISSING", "\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u8bbf\u95ee\uff1a" + args.folder);
         }
-        var files = listPngNames(folder);
-        var computed = QPECore.computeExport(files, prefixCheck.prefix, args.digits, true);
+        var files = listFileNames(folder);
+        var computed = QPECore.computeExport(files, prefixCheck.prefix, args.digits, true, scanOptions(args));
         return {
             ok: true,
             fileName: computed.fileName,
@@ -760,7 +900,38 @@ var QPE = (function () {
         }
     }
 
-    function convertCopyForPng(doc) {
+    // A JPG has no alpha channel, so transparent areas have to become white.
+    // This always happens on the temporary copy: the source document keeps its
+    // layers, visibility, mode and bit depth.
+    //
+    // Flattening fills transparency with white; when the copy has no Background
+    // layer an explicit white layer is added at the bottom first so the result
+    // is white regardless of the application's background colour. Documents
+    // that already have a Background layer are opaque and only need flattening.
+    function fillWhiteAndFlatten(copy) {
+        var hasBackground = false;
+        try {
+            hasBackground = copy.backgroundLayer !== null && typeof copy.backgroundLayer !== "undefined";
+        } catch (backgroundError) {
+            hasBackground = false;
+        }
+        if (!hasBackground) {
+            var white = new SolidColor();
+            white.rgb.red = 255;
+            white.rgb.green = 255;
+            white.rgb.blue = 255;
+            var background = copy.artLayers.add();
+            background.name = "QPE-white-background";
+            background.move(copy, ElementPlacement.PLACEATEND);
+            copy.activeLayer = background;
+            copy.selection.selectAll();
+            copy.selection.fill(white);
+            copy.selection.deselect();
+        }
+        copy.flatten();
+    }
+
+    function prepareCopyForExport(doc, format) {
         var warnings = [];
         var copy = doc.duplicate("QuickPNG-temp");
         try {
@@ -769,6 +940,9 @@ var QPE = (function () {
             }
             if (copy.mode !== DocumentMode.RGB) {
                 copy.mode = DocumentMode.RGB;
+            }
+            if (format === "jpg") {
+                fillWhiteAndFlatten(copy);
             }
         } catch (conversionError) {
             try {
@@ -779,14 +953,16 @@ var QPE = (function () {
             throw conversionError;
         }
 
-        var originalMode = modeName(doc.mode);
-        var originalDepth = bitDepthName(doc.bitsPerChannel);
-        warnings[warnings.length] =
-            "\u539f\u6587\u6863\u4e3a " + originalMode + " / " + originalDepth +
-            " \u4f4d\uff0c\u5df2\u5728\u4e34\u65f6\u526f\u672c\u4e2d\u8f6c\u6362\u4e3a RGB / 8 \u4f4d\u540e\u5bfc\u51fa\uff08\u989c\u8272\u53ef\u80fd\u6709\u504f\u79fb\uff0c\u6e90\u6587\u6863\u672a\u88ab\u4fee\u6539\uff09";
-        if (originalMode !== "RGB") {
+        if (needsConversion(doc)) {
+            var originalMode = modeName(doc.mode);
+            var originalDepth = bitDepthName(doc.bitsPerChannel);
             warnings[warnings.length] =
-                "\u539f\u6587\u6863\u6ca1\u6709\u900f\u660e\u901a\u9053\uff1b\u8f6c\u6362\u4e3a RGB \u540e\u900f\u660e\u533a\u57df\u4f1a\u53d8\u4e3a\u767d\u8272/\u80cc\u666f\u8272";
+                "\u539f\u6587\u6863\u4e3a " + originalMode + " / " + originalDepth +
+                " \u4f4d\uff0c\u5df2\u5728\u4e34\u65f6\u526f\u672c\u4e2d\u8f6c\u6362\u4e3a RGB / 8 \u4f4d\u540e\u5bfc\u51fa\uff08\u989c\u8272\u53ef\u80fd\u6709\u504f\u79fb\uff0c\u6e90\u6587\u6863\u672a\u88ab\u4fee\u6539\uff09";
+            if (originalMode !== "RGB") {
+                warnings[warnings.length] =
+                    "\u539f\u6587\u6863\u6ca1\u6709\u900f\u660e\u901a\u9053\uff1b\u8f6c\u6362\u4e3a RGB \u540e\u900f\u660e\u533a\u57df\u4f1a\u53d8\u4e3a\u767d\u8272/\u80cc\u666f\u8272";
+            }
         }
         return {
             copy: copy,
@@ -794,7 +970,7 @@ var QPE = (function () {
         };
     }
 
-    function exportPng(args) {
+    function exportImage(args) {
         if (app.documents.length === 0) {
             return fail("NO_DOCUMENT", "\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a Photoshop \u6587\u6863");
         }
@@ -809,8 +985,14 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "\u5e8f\u53f7\u4f4d\u6570\u53ea\u80fd\u662f 1\u30012 \u6216 3 \u4f4d");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
         if (!args.folder) {
-            return fail("NO_FOLDER", "\u8bf7\u9009\u62e9 PNG \u8f93\u51fa\u6587\u4ef6\u5939");
+            return fail("NO_FOLDER", "\u8bf7\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939");
         }
         var folder = folderFromPath(args.folder);
         if (!folder) {
@@ -823,29 +1005,18 @@ var QPE = (function () {
 
         var prefix = prefixCheck.prefix;
         var digits = args.digits;
-        var maxNumber = 0;
-        var existingCount = 0;
-        var fileName = "";
-        var fullPath = "";
-        var number = 0;
 
         // Re-scan right before saving: the preview/predicted name is never
         // trusted for the final write.
-        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
-            var files = listPngNames(folder);
-            var computed = QPECore.computeExport(files, prefix, digits, true);
-            number = computed.nextNumber;
-            maxNumber = computed.maxNumber;
-            existingCount = computed.existingCount;
-            fileName = computed.fileName;
-            fullPath = joinPath(folder.fsName, fileName);
-            if (!new File(fullPath).exists) {
-                break;
-            }
+        var target = nextFreeTarget(folder, prefix, digits, true, options);
+        if (!target.ok) {
+            return fail(target.code, target.message);
         }
-        if (new File(fullPath).exists) {
-            return fail("COLLISION", "\u76ee\u6807\u6587\u4ef6\u5df2\u5b58\u5728\u4e14\u65e0\u6cd5\u81ea\u52a8\u5206\u914d\u5e8f\u53f7\uff1a" + fileName);
-        }
+        var number = target.number;
+        var maxNumber = target.maxNumber;
+        var existingCount = target.existingCount;
+        var fileName = target.fileName;
+        var fullPath = target.fullPath;
 
         var oldDialogs = app.displayDialogs;
         var copy = null;
@@ -854,18 +1025,16 @@ var QPE = (function () {
         try {
             app.displayDialogs = DialogModes.NO;
 
-            var target = doc;
-            if (needsConversion(doc)) {
-                var prepared = convertCopyForPng(doc);
-                target = prepared.copy;
+            var saveTarget = doc;
+            if (needsConversion(doc) || format === "jpg") {
+                var prepared = prepareCopyForExport(doc, format);
+                saveTarget = prepared.copy;
                 copy = prepared.copy;
                 warnings = prepared.warnings;
-                converted = true;
+                converted = needsConversion(doc);
             }
 
-            var options = new PNGSaveOptions();
-            options.interlaced = false;
-            target.saveAs(new File(fullPath), options, true, Extension.LOWERCASE);
+            saveTarget.saveAs(new File(fullPath), saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
 
             if (copy) {
                 copy.close(SaveOptions.DONOTSAVECHANGES);
@@ -909,9 +1078,119 @@ var QPE = (function () {
             number: number,
             maxNumber: maxNumber,
             existingCount: existingCount,
+            format: format,
+            quality: format === "jpg" ? QPECore.normalizeJpegQuality(args.quality) : null,
             converted: converted,
             warnings: warnings,
             document: doc.name
+        };
+    }
+
+    // Legacy PNG-only entry point kept for older panel builds and scripts.
+    function exportPng(args) {
+        args.format = "png";
+        return exportImage(args);
+    }
+
+    /* ---------- size estimate ---------- */
+
+    var ESTIMATE_TEMP_PREFIX = "qpe-estimate-";
+
+    // The estimate must never touch the output folder or the source document,
+    // so it saves with the exact same options to a throw-away system temp file.
+    function uniqueTempFile(extension) {
+        var tempFolder;
+        try {
+            tempFolder = Folder.temp;
+        } catch (tempError) {
+            return null;
+        }
+        if (!tempFolder || !tempFolder.fsName) {
+            return null;
+        }
+        var stamp = (new Date()).getTime();
+        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+            var candidate = new File(joinPath(tempFolder.fsName,
+                ESTIMATE_TEMP_PREFIX + stamp + "-" + attempt + extension));
+            if (!candidate.exists) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    function estimateSize(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a Photoshop \u6587\u6863");
+        }
+        var doc = app.activeDocument;
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var tempFile = uniqueTempFile(QPECore.formatExtension(format));
+        if (!tempFile) {
+            return fail("ESTIMATE_FAILED", "\u65e0\u6cd5\u521b\u5efa\u4e34\u65f6\u6587\u4ef6\u7528\u4e8e\u4f30\u7b97");
+        }
+        var oldDialogs = app.displayDialogs;
+        var copy = null;
+        var bytes = 0;
+        try {
+            app.displayDialogs = DialogModes.NO;
+            var saveTarget = doc;
+            if (needsConversion(doc) || format === "jpg") {
+                var prepared = prepareCopyForExport(doc, format);
+                saveTarget = prepared.copy;
+                copy = prepared.copy;
+            }
+            saveTarget.saveAs(tempFile, saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
+            if (copy) {
+                copy.close(SaveOptions.DONOTSAVECHANGES);
+                copy = null;
+            }
+            try {
+                app.activeDocument = doc;
+            } catch (activateError) {
+                // ignore: the source document is still open and unchanged
+            }
+            var savedFile = new File(tempFile.fsName);
+            if (!savedFile.exists) {
+                return fail("ESTIMATE_FAILED", "\u4f30\u7b97\u540e\u627e\u4e0d\u5230\u4e34\u65f6\u6587\u4ef6");
+            }
+            bytes = savedFile.length;
+            if (bytes <= 0) {
+                return fail("ESTIMATE_FAILED", "\u4f30\u7b97\u7ed3\u679c\u4e3a\u7a7a\u6587\u4ef6");
+            }
+        } catch (estimateError) {
+            return fail("ESTIMATE_FAILED", "\u65e0\u6cd5\u4f30\u7b97\u5927\u5c0f\uff1a" + errorText(estimateError));
+        } finally {
+            if (copy) {
+                try {
+                    copy.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeError) {
+                    // ignore
+                }
+                copy = null;
+            }
+            try {
+                if (tempFile.exists) {
+                    tempFile.remove();
+                }
+            } catch (removeError) {
+                // best effort: reporting is more useful than throwing here
+            }
+            try {
+                app.displayDialogs = oldDialogs;
+            } catch (dialogRestoreError) {
+                // ignore
+            }
+        }
+        return {
+            ok: true,
+            bytes: bytes,
+            format: format,
+            quality: format === "jpg" ? QPECore.normalizeJpegQuality(args.quality) : null
         };
     }
 
@@ -1394,53 +1673,144 @@ var QPE = (function () {
         }
     }
 
-    // Saves the isolated temporary copy as a PNG with the next free number.
-    function saveBatchPng(workDoc, folder, prefix, digits) {
-        var fileName = "";
-        var fullPath = "";
-        var number = 0;
-        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
-            var files = listPngNames(folder);
-            var computed = QPECore.computeExport(files, prefix, digits, true);
-            number = computed.nextNumber;
-            fileName = computed.fileName;
-            fullPath = joinPath(folder.fsName, fileName);
-            if (!new File(fullPath).exists) {
-                break;
-            }
+    // Saves the isolated temporary copy as the next free file.
+    //
+    // PNG can be probed for transparency after saving (zero-area bounds mean an
+    // empty selection), but a JPEG has no alpha channel. For JPG the copy is
+    // therefore first written to a throw-away PNG, probed, and only a non-empty
+    // item is flattened onto white and written as JPG. Empty items never
+    // consume a number and never leave a file behind.
+    function saveBatchImage(workDoc, folder, prefix, digits, format, quality, options) {
+        if (format === "jpg") {
+            return saveBatchJpg(workDoc, folder, prefix, digits, quality, options);
         }
-        var file = new File(fullPath);
-        if (file.exists) {
-            return {
-                ok: false,
-                code: "COLLISION",
-                message: "\u76ee\u6807\u6587\u4ef6\u5df2\u5b58\u5728\u4e14\u65e0\u6cd5\u81ea\u52a8\u5206\u914d\u5e8f\u53f7\uff1a" + fileName
-            };
+        var target = nextFreeTarget(folder, prefix, digits, true, options);
+        if (!target.ok) {
+            return target;
         }
-        var options = new PNGSaveOptions();
-        options.interlaced = false;
-        workDoc.saveAs(file, options, true, Extension.LOWERCASE);
-        file = new File(fullPath);
+        workDoc.saveAs(new File(target.fullPath), saveOptionsFor("png", quality), true, Extension.LOWERCASE);
+        var file = new File(target.fullPath);
         if (!file.exists) {
             return {
                 ok: false,
                 code: "VERIFY_FAILED",
-                message: "\u5bfc\u51fa\u540e\u627e\u4e0d\u5230\u8f93\u51fa\u6587\u4ef6\uff1a" + fullPath
+                message: "\u5bfc\u51fa\u540e\u627e\u4e0d\u5230\u8f93\u51fa\u6587\u4ef6\uff1a" + target.fullPath
             };
         }
         if (file.length <= 0) {
             return {
                 ok: false,
                 code: "VERIFY_FAILED",
-                message: "\u5bfc\u51fa\u7684\u6587\u4ef6\u4e3a\u7a7a\uff080 \u5b57\u8282\uff09\uff1a" + fullPath
+                message: "\u5bfc\u51fa\u7684\u6587\u4ef6\u4e3a\u7a7a\uff080 \u5b57\u8282\uff09\uff1a" + target.fullPath
+            };
+        }
+        var probe = probePngHasPixels(file);
+        if (!probe.ok) {
+            return {
+                ok: false,
+                code: "ALPHA_CHECK_FAILED",
+                message: "\u65e0\u6cd5\u68c0\u6d4b\u5bfc\u51fa\u7ed3\u679c\u7684\u900f\u660e\u5ea6\uff1a" + probe.message
             };
         }
         return {
             ok: true,
-            number: number,
-            fileName: fileName,
+            empty: !probe.hasPixels,
+            number: target.number,
+            fileName: target.fileName,
             file: file
         };
+    }
+
+    function saveBatchJpg(workDoc, folder, prefix, digits, quality, options) {
+        var tempPng = uniqueTempFile(".png");
+        if (!tempPng) {
+            return {
+                ok: false,
+                code: "TEMP_FAILED",
+                message: "\u65e0\u6cd5\u521b\u5efa\u4e34\u65f6\u6587\u4ef6\u7528\u4e8e\u68c0\u6d4b\u7a7a\u56fe\u5c42"
+            };
+        }
+        var probeDoc = null;
+        try {
+            workDoc.saveAs(tempPng, saveOptionsFor("png", quality), true, Extension.LOWERCASE);
+            probeDoc = app.open(tempPng);
+            var bounds = probeDoc.activeLayer.bounds;
+            var width = bounds[2].as("px") - bounds[0].as("px");
+            var height = bounds[3].as("px") - bounds[1].as("px");
+            if (!(width > 0 && height > 0)) {
+                return {
+                    ok: true,
+                    empty: true,
+                    number: 0,
+                    fileName: "",
+                    file: null
+                };
+            }
+
+            fillWhiteAndFlatten(probeDoc);
+
+            // The number is allocated only after the item is known to have
+            // pixels, so skipped items never consume a number.
+            var target = nextFreeTarget(folder, prefix, digits, true, options);
+            if (!target.ok) {
+                return target;
+            }
+            probeDoc.saveAs(new File(target.fullPath), saveOptionsFor("jpg", quality), true, Extension.LOWERCASE);
+            try {
+                probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+            } catch (closeError) {
+                // ignore
+            }
+            probeDoc = null;
+            try {
+                app.activeDocument = workDoc;
+            } catch (activateError) {
+                // ignore
+            }
+            var file = new File(target.fullPath);
+            if (!file.exists) {
+                return {
+                    ok: false,
+                    code: "VERIFY_FAILED",
+                    message: "\u5bfc\u51fa\u540e\u627e\u4e0d\u5230\u8f93\u51fa\u6587\u4ef6\uff1a" + target.fullPath
+                };
+            }
+            if (file.length <= 0) {
+                return {
+                    ok: false,
+                    code: "VERIFY_FAILED",
+                    message: "\u5bfc\u51fa\u7684\u6587\u4ef6\u4e3a\u7a7a\uff080 \u5b57\u8282\uff09\uff1a" + target.fullPath
+                };
+            }
+            return {
+                ok: true,
+                empty: false,
+                number: target.number,
+                fileName: target.fileName,
+                file: file
+            };
+        } catch (saveError) {
+            return {
+                ok: false,
+                code: "SAVE_FAILED",
+                message: "\u5bfc\u51fa\u5931\u8d25\uff1a" + errorText(saveError)
+            };
+        } finally {
+            if (probeDoc) {
+                try {
+                    probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeProbeError) {
+                    // ignore
+                }
+            }
+            try {
+                if (tempPng.exists) {
+                    tempPng.remove();
+                }
+            } catch (removeError) {
+                // best effort: the caller reports visible problems
+            }
+        }
     }
 
     // Re-opens the just-saved PNG and reads its single layer bounds. A fully
@@ -1505,6 +1875,12 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "\u5e8f\u53f7\u4f4d\u6570\u53ea\u80fd\u662f 1\u30012 \u6216 3 \u4f4d");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
 
         var selection = readTargetLayerIds();
         if (!selection.ok) {
@@ -1541,10 +1917,10 @@ var QPE = (function () {
             if (!folder) {
                 return fail("FOLDER_MISSING", "\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u8bbf\u95ee\uff1a" + args.folder);
             }
-            files = listPngNames(folder);
+            files = listFileNames(folder);
             folderAvailable = true;
         }
-        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, exportable.length, true);
+        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, exportable.length, true, options);
         var items = [];
         for (i = 0; i < exportable.length; i++) {
             items[items.length] = {
@@ -1593,8 +1969,14 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "\u5e8f\u53f7\u4f4d\u6570\u53ea\u80fd\u662f 1\u30012 \u6216 3 \u4f4d");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
         if (!args.folder) {
-            return fail("NO_FOLDER", "\u8bf7\u9009\u62e9 PNG \u8f93\u51fa\u6587\u4ef6\u5939");
+            return fail("NO_FOLDER", "\u8bf7\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939");
         }
         var folder = folderFromPath(args.folder);
         if (!folder) {
@@ -1689,7 +2071,8 @@ var QPE = (function () {
                     isolateRecord(workTarget, workIndex, visibleById);
 
                     phase = "save";
-                    var saved = saveBatchPng(workDoc, folder, prefixCheck.prefix, args.digits);
+                    var saved = saveBatchImage(workDoc, folder, prefixCheck.prefix, args.digits,
+                        format, args.quality, options);
                     if (!saved.ok) {
                         failed = {
                             id: target.id,
@@ -1701,30 +2084,18 @@ var QPE = (function () {
                         unprocessed = totalTargets - t - 1;
                         break;
                     }
-
-                    phase = "detect";
-                    var probe = probePngHasPixels(saved.file);
-                    if (!probe.ok) {
-                        failed = {
-                            id: target.id,
-                            name: target.name,
-                            phase: phase,
-                            code: "ALPHA_CHECK_FAILED",
-                            message: "\u65e0\u6cd5\u68c0\u6d4b\u5bfc\u51fa\u7ed3\u679c\u7684\u900f\u660e\u5ea6\uff1a" + probe.message
-                        };
-                        unprocessed = totalTargets - t - 1;
-                        break;
-                    }
-                    if (!probe.hasPixels) {
+                    if (saved.empty) {
                         var removed = false;
-                        try {
-                            removed = saved.file.remove();
-                        } catch (removeError) {
-                            removed = false;
-                        }
-                        if (!removed) {
-                            cleanupErrors[cleanupErrors.length] =
-                                "\u65e0\u6cd5\u5220\u9664\u5168\u900f\u660e\u63a2\u6d4b\u6587\u4ef6\uff0c\u8be5\u7f16\u53f7\u5df2\u88ab\u5360\u7528\uff1a" + saved.file.fsName;
+                        if (saved.file) {
+                            try {
+                                removed = saved.file.remove();
+                            } catch (removeError) {
+                                removed = false;
+                            }
+                            if (!removed) {
+                                cleanupErrors[cleanupErrors.length] =
+                                    "\u65e0\u6cd5\u5220\u9664\u5168\u900f\u660e\u63a2\u6d4b\u6587\u4ef6\uff0c\u8be5\u7f16\u53f7\u5df2\u88ab\u5360\u7528\uff1a" + saved.file.fsName;
+                            }
                         }
                         skipped[skipped.length] = {
                             id: target.id,
@@ -1847,9 +2218,9 @@ var QPE = (function () {
         }
         var chosen = null;
         if (startFolder) {
-            chosen = Folder.selectDialog("\u8bf7\u9009\u62e9 PNG \u8f93\u51fa\u6587\u4ef6\u5939", startFolder);
+            chosen = Folder.selectDialog("\u8bf7\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939", startFolder);
         } else {
-            chosen = Folder.selectDialog("\u8bf7\u9009\u62e9 PNG \u8f93\u51fa\u6587\u4ef6\u5939");
+            chosen = Folder.selectDialog("\u8bf7\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939");
         }
         if (!chosen) {
             return {
@@ -1884,8 +2255,10 @@ var QPE = (function () {
     var METHODS = {
         status: status,
         preview: preview,
-        previewSelectedLayers: previewSelectedLayers,
+        exportImage: exportImage,
+        estimateSize: estimateSize,
         exportPng: exportPng,
+        previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
         pickFolder: pickFolder,
         openFolder: openFolder
@@ -1924,8 +2297,10 @@ var QPE = (function () {
     return {
         status: status,
         preview: preview,
-        previewSelectedLayers: previewSelectedLayers,
+        exportImage: exportImage,
+        estimateSize: estimateSize,
         exportPng: exportPng,
+        previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
         pickFolder: pickFolder,
         openFolder: openFolder,

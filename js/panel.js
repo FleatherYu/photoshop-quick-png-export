@@ -13,22 +13,43 @@
         prefix: "qpe.prefix",
         digits: "qpe.digits",
         folder: "qpe.folder",
-        mode: "qpe.mode"
+        lastFolder: "qpe.lastFolder",
+        folderMode: "qpe.folderMode",
+        mode: "qpe.mode",
+        format: "qpe.format",
+        quality: "qpe.quality",
+        numbering: "qpe.numbering"
     };
     var PREVIEW_DEBOUNCE_MS = 180;
     var DOC_POLL_MS = 5000;
+    var FORMAT_PNG = "png";
+    var FORMAT_JPG = "jpg";
 
     var els = {};
     var state = {
         prefix: "",
         digits: 2,
         folder: "",
+        lastFolder: "",
+        folderMode: "document",
+        folderSource: "",
+        // True once the user picked a folder by hand for the current document:
+        // following the document must then leave that choice alone.
+        folderEdited: false,
         mode: "document",
+        format: FORMAT_PNG,
+        quality: 10,
+        numbering: "shared",
         busy: false,
         previewToken: 0,
         previewTimer: 0,
+        estimateToken: 0,
+        estimateKey: "",
+        estimateText: "",
         lastPath: "",
         lastDocName: null,
+        docKey: null,
+        docFingerprint: "",
         prefixEdited: false,
         // Snapshot of the selection preview; export refuses to run on a stale one.
         selectionKey: ""
@@ -61,7 +82,14 @@
     function restoreState() {
         state.prefix = storeGet(STORAGE_KEYS.prefix, "");
         state.folder = storeGet(STORAGE_KEYS.folder, "");
+        state.lastFolder = storeGet(STORAGE_KEYS.lastFolder, "") || state.folder;
+        state.folderMode = storeGet(STORAGE_KEYS.folderMode, "") === "last" ? "last" : "document";
+        state.folderSource = state.folder ? "last" : "";
         state.mode = storeGet(STORAGE_KEYS.mode, "document") === "selection" ? "selection" : "document";
+        state.format = storeGet(STORAGE_KEYS.format, "") === FORMAT_JPG ? FORMAT_JPG : FORMAT_PNG;
+        var quality = parseInt(storeGet(STORAGE_KEYS.quality, "10"), 10);
+        state.quality = (quality >= 0 && quality <= 12) ? quality : 10;
+        state.numbering = storeGet(STORAGE_KEYS.numbering, "") === "separate" ? "separate" : "shared";
         var digits = parseInt(storeGet(STORAGE_KEYS.digits, "2"), 10);
         state.digits = (digits === 1 || digits === 2 || digits === 3) ? digits : 2;
     }
@@ -86,36 +114,82 @@
             (text ? "" : " hidden");
     }
 
-    function renderDigits() {
-        var buttons = els.digits.querySelectorAll("button");
+    function setSegPressed(container, attribute, value) {
+        var buttons = container.querySelectorAll("button");
         for (var i = 0; i < buttons.length; i++) {
-            var value = parseInt(buttons[i].getAttribute("data-digits"), 10);
-            buttons[i].setAttribute("aria-pressed", value === state.digits ? "true" : "false");
+            var pressed = buttons[i].getAttribute(attribute) === value;
+            buttons[i].setAttribute("aria-pressed", pressed ? "true" : "false");
         }
+    }
+
+    function renderDigits() {
+        setSegPressed(els.digits, "data-digits", String(state.digits));
+    }
+
+    function renderFormat() {
+        setSegPressed(els.format, "data-format", state.format);
+        els.qualityRow.classList.toggle("hidden", state.format !== FORMAT_JPG);
+        // Size estimates only make sense for the whole document; batch mode
+        // exports one isolated object per file, so there is no single size.
+        els.estimateRow.classList.toggle("hidden", state.mode === "selection");
+        els.exportBtn.textContent = exportLabel();
+        renderQuality();
+    }
+
+    function qualityTier(quality) {
+        if (quality <= 3) {
+            return "低";
+        }
+        if (quality <= 7) {
+            return "中";
+        }
+        if (quality <= 10) {
+            return "高";
+        }
+        return "最佳";
+    }
+
+    function renderQuality() {
+        els.quality.value = String(state.quality);
+        els.qualityValue.textContent = state.quality + "（" + qualityTier(state.quality) + "）";
     }
 
     function renderFolder() {
         els.folderPath.textContent = state.folder || "未选择输出文件夹";
         els.folderPath.title = state.folder || "";
         els.folderPath.classList.toggle("placeholder", !state.folder);
+
+        var source = "";
+        if (state.folder) {
+            if (state.folderSource === "document") {
+                source = "来源：文档所在文件夹";
+            } else if (state.folderSource === "manual") {
+                source = "来源：手动选择";
+            } else if (state.folderSource === "last") {
+                source = "来源：上次使用的位置";
+            }
+        }
+        els.folderSource.textContent = source;
+        els.folderSource.className = "hint" + (source ? "" : " hidden");
+    }
+
+    function renderSettings() {
+        setSegPressed(els.numbering, "data-numbering", state.numbering);
+        setSegPressed(els.folderMode, "data-folder-mode", state.folderMode);
     }
 
     function exportLabel() {
         if (state.mode === "selection") {
             return state.busy ? "正在批量导出…" : "批量导出选中图层";
         }
-        return state.busy ? "正在导出…" : "快速导出 PNG";
+        var formatName = state.format === FORMAT_JPG ? "JPG" : "PNG";
+        return state.busy ? "正在导出…" : "快速导出 " + formatName;
     }
 
     function renderMode() {
-        var buttons = els.mode.querySelectorAll("button");
-        for (var i = 0; i < buttons.length; i++) {
-            var selectionMode = buttons[i].getAttribute("data-mode") === "selection";
-            var pressed = (state.mode === "selection") === selectionMode;
-            buttons[i].setAttribute("aria-pressed", pressed ? "true" : "false");
-        }
+        setSegPressed(els.mode, "data-mode", state.mode);
         els.selectionBox.classList.toggle("hidden", state.mode !== "selection");
-        els.exportBtn.textContent = exportLabel();
+        renderFormat();
     }
 
     /* ---------- document status ---------- */
@@ -142,6 +216,46 @@
         updatePreview();
     }
 
+    // "Follow the document folder" mode. A manual folder choice for this
+    // document always wins; switching documents re-applies the rule. Unsaved
+    // documents (no path) fall back to the last folder that was used.
+    function applyDocumentFolder(result, documentChanged) {
+        if (state.folderMode === "last") {
+            return; // 1.1.0 behaviour: the remembered folder is never replaced
+        }
+        if (state.folderEdited && !documentChanged) {
+            return;
+        }
+        var target = "";
+        var source = "";
+        if (result.hasDocument && result.path) {
+            target = result.path;
+            source = "document";
+        } else if (state.lastFolder) {
+            target = state.lastFolder;
+            source = "last";
+        }
+        if (!target || (state.folder === target && state.folderSource === source)) {
+            return;
+        }
+        state.folder = target;
+        state.folderSource = source;
+        storeSet(STORAGE_KEYS.folder, target);
+        renderFolder();
+        updatePreview();
+    }
+
+    function documentFingerprint(result) {
+        return [
+            result.name,
+            result.width,
+            result.height,
+            result.mode,
+            result.bitDepth,
+            result.layerCount
+        ].join("|");
+    }
+
     function refreshDocument() {
         CEPBridge.call("status", {}, function (result) {
             if (!result.ok) {
@@ -154,6 +268,9 @@
                 els.docInfo.className = "doc-info warn";
                 state.lastDocName = null;
                 state.selectionKey = "";
+                state.docKey = null;
+                state.docFingerprint = "";
+                setEstimate("—");
                 return;
             }
             els.docInfo.textContent =
@@ -162,6 +279,15 @@
             els.docInfo.className = "doc-info";
             els.docInfo.title = result.saved ? "文档已保存" : "文档有未保存的修改";
 
+            var fingerprint = documentFingerprint(result);
+            var docKey = result.name + "|" + (result.path || "");
+            var documentChanged = docKey !== state.docKey;
+            if (documentChanged) {
+                state.docKey = docKey;
+                // A different document starts with its own folder choice.
+                state.folderEdited = false;
+            }
+
             if (result.name !== state.lastDocName) {
                 // New / different document: the default prefix applies again.
                 state.lastDocName = result.name;
@@ -169,11 +295,88 @@
                 setPrefixNote("");
             }
             applyDocumentPrefix(result);
+            applyDocumentFolder(result, documentChanged);
+
+            if (fingerprint !== state.docFingerprint) {
+                state.docFingerprint = fingerprint;
+                invalidateEstimate();
+            }
+
             if (state.mode === "selection") {
                 // The selection can change in Photoshop at any time; the 5 s
                 // poll keeps the batch count and the export key fresh.
                 schedulePreview();
             }
+        });
+    }
+
+    /* ---------- size estimate ---------- */
+
+    function formatBytes(bytes) {
+        if (!isFinite(bytes) || bytes <= 0) {
+            return "";
+        }
+        if (bytes >= 1048576) {
+            return (bytes / 1048576).toFixed(1) + " MB";
+        }
+        if (bytes >= 1024) {
+            return Math.round(bytes / 1024) + " KB";
+        }
+        return bytes + " B";
+    }
+
+    function setEstimate(text, kind) {
+        els.estimateValue.textContent = text;
+        els.estimateValue.className = "preview-value" + (kind ? " " + kind : "");
+    }
+
+    function estimateKey() {
+        return [
+            state.format,
+            state.format === FORMAT_JPG ? state.quality : "",
+            state.docKey || "",
+            state.docFingerprint
+        ].join("|");
+    }
+
+    // The host saves the current document to a temp file with the exact same
+    // save options as a real export, so the number is an honest estimate. Only
+    // triggers that can change the result call this; dragging the quality
+    // slider only updates the label.
+    function invalidateEstimate() {
+        if (state.mode === "selection") {
+            setEstimate("—");
+            return;
+        }
+        if (state.busy) {
+            // No new estimates during an export; a stale in-flight one is
+            // dropped by the token bump in setBusy.
+            return;
+        }
+        var key = estimateKey();
+        if (key === state.estimateKey && state.estimateText) {
+            setEstimate(state.estimateText);
+            return;
+        }
+        state.estimateKey = "";
+        var token = state.estimateToken + 1;
+        state.estimateToken = token;
+        setEstimate("正在估算…", "placeholder");
+        CEPBridge.call("estimateSize", {
+            format: state.format,
+            quality: state.quality
+        }, function (result) {
+            if (token !== state.estimateToken || state.busy) {
+                return; // a newer estimate or an export already took over
+            }
+            if (!result.ok) {
+                setEstimate("无法估算", "warn");
+                return;
+            }
+            var text = "约 " + formatBytes(result.bytes);
+            state.estimateKey = estimateKey();
+            state.estimateText = text;
+            setEstimate(text);
         });
     }
 
@@ -192,6 +395,17 @@
         }
     }
 
+    function scanArguments() {
+        return {
+            prefix: state.prefix,
+            digits: state.digits,
+            folder: state.folder,
+            format: state.format,
+            quality: state.quality,
+            numbering: state.numbering
+        };
+    }
+
     function updateDocumentPreview() {
         var token = state.previewToken + 1;
         state.previewToken = token;
@@ -202,18 +416,15 @@
             return;
         }
 
-        CEPBridge.call("preview", {
-            prefix: state.prefix,
-            digits: state.digits,
-            folder: state.folder
-        }, function (result) {
+        CEPBridge.call("preview", scanArguments(), function (result) {
             if (token !== state.previewToken) {
                 return; // a newer keystroke already asked
             }
             if (!result.ok) {
                 els.nextFile.textContent = "—";
                 if (result.code === "EMPTY" || result.code === "ILLEGAL_CHARS" ||
-                    result.code === "TRAILING_DOT" || result.code === "TOO_LONG") {
+                    result.code === "TRAILING_DOT" || result.code === "TOO_LONG" ||
+                    result.code === "BAD_QUALITY") {
                     setHint(result.message, "warn");
                 } else {
                     setHint(result.message || "无法计算文件名", "warn");
@@ -244,11 +455,7 @@
             return;
         }
 
-        CEPBridge.call("previewSelectedLayers", {
-            prefix: state.prefix,
-            digits: state.digits,
-            folder: state.folder
-        }, function (result) {
+        CEPBridge.call("previewSelectedLayers", scanArguments(), function (result) {
             if (token !== state.previewToken) {
                 return;
             }
@@ -309,6 +516,11 @@
 
     /* ---------- folder ---------- */
 
+    function rememberFolder(folder) {
+        state.lastFolder = folder;
+        storeSet(STORAGE_KEYS.lastFolder, folder);
+    }
+
     function pickFolder() {
         if (state.busy) {
             return;
@@ -324,6 +536,11 @@
                 return;
             }
             state.folder = result.path;
+            // A manual choice is remembered and is not overridden by the
+            // document-follow rule for this document.
+            state.folderEdited = true;
+            state.folderSource = "manual";
+            rememberFolder(result.path);
             storeSet(STORAGE_KEYS.folder, state.folder);
             renderFolder();
             setStatus("info", "已选择输出文件夹，可开始导出。");
@@ -350,16 +567,36 @@
         els.pick.disabled = busy;
         els.prefix.disabled = busy;
         els.refreshSelection.disabled = busy;
+        els.quality.disabled = busy;
         var i;
         var modeButtons = els.mode.querySelectorAll("button");
         for (i = 0; i < modeButtons.length; i++) {
             modeButtons[i].disabled = busy;
         }
+        var formatButtons = els.format.querySelectorAll("button");
+        for (i = 0; i < formatButtons.length; i++) {
+            formatButtons[i].disabled = busy;
+        }
         var digitButtons = els.digits.querySelectorAll("button");
         for (i = 0; i < digitButtons.length; i++) {
             digitButtons[i].disabled = busy;
         }
+        var settingButtons = els.numbering.querySelectorAll("button");
+        for (i = 0; i < settingButtons.length; i++) {
+            settingButtons[i].disabled = busy;
+        }
+        var folderModeButtons = els.folderMode.querySelectorAll("button");
+        for (i = 0; i < folderModeButtons.length; i++) {
+            folderModeButtons[i].disabled = busy;
+        }
         els.exportBtn.textContent = exportLabel();
+
+        if (busy) {
+            // Drop any in-flight estimate: its token no longer matches.
+            state.estimateToken = state.estimateToken + 1;
+        } else if (els.estimateValue.textContent === "正在估算…") {
+            invalidateEstimate();
+        }
     }
 
     function doExport() {
@@ -367,6 +604,12 @@
             doExportSelection();
         } else {
             doExportDocument();
+        }
+    }
+
+    function rememberExportFolder() {
+        if (state.folder) {
+            rememberFolder(state.folder);
         }
     }
 
@@ -380,18 +623,14 @@
             return;
         }
         if (!state.folder) {
-            setStatus("error", "请选择 PNG 输出文件夹");
+            setStatus("error", "请选择输出文件夹");
             return;
         }
 
         setBusy(true);
         setStatus("busy", "正在导出，请稍候…");
 
-        CEPBridge.call("exportPng", {
-            prefix: state.prefix,
-            digits: state.digits,
-            folder: state.folder
-        }, function (result) {
+        CEPBridge.call("exportImage", scanArguments(), function (result) {
             setBusy(false);
 
             if (!result.ok) {
@@ -404,6 +643,7 @@
                 return;
             }
 
+            rememberExportFolder();
             var lines = ["已导出：" + result.fileName];
             var warnings = result.warnings || [];
             for (var i = 0; i < warnings.length; i++) {
@@ -431,7 +671,7 @@
             return;
         }
         if (!state.folder) {
-            setStatus("error", "请选择 PNG 输出文件夹");
+            setStatus("error", "请选择输出文件夹");
             return;
         }
         if (!state.selectionKey) {
@@ -443,12 +683,10 @@
         setBusy(true);
         setStatus("busy", "正在批量导出，请稍候…");
 
-        CEPBridge.call("exportSelectedLayers", {
-            prefix: state.prefix,
-            digits: state.digits,
-            folder: state.folder,
-            selectionKey: state.selectionKey
-        }, function (result) {
+        var args = scanArguments();
+        args.selectionKey = state.selectionKey;
+
+        CEPBridge.call("exportSelectedLayers", args, function (result) {
             setBusy(false);
 
             if (result.code === "SELECTION_CHANGED") {
@@ -461,6 +699,9 @@
             // Partial results must survive ok:false: files that were written
             // stay on disk and are shown to the user.
             renderBatchResult(result);
+            if (result.ok) {
+                rememberExportFolder();
+            }
 
             if (!result.ok) {
                 setStatus("error", result.message || "批量导出失败");
@@ -575,6 +816,17 @@
 
     /* ---------- wiring ---------- */
 
+    function clickedSegButton(container, attribute, event) {
+        var button = event.target;
+        while (button && button !== container && !button.getAttribute(attribute)) {
+            button = button.parentNode;
+        }
+        if (!button || button === container) {
+            return null;
+        }
+        return button;
+    }
+
     function bindEvents() {
         els.prefix.addEventListener("input", function () {
             // Typing claims the prefix for this document: the 5 s status poll
@@ -593,17 +845,84 @@
         });
 
         els.digits.addEventListener("click", function (event) {
-            var button = event.target;
-            while (button && button !== els.digits && !button.getAttribute("data-digits")) {
-                button = button.parentNode;
-            }
-            if (!button || button === els.digits) {
+            var button = clickedSegButton(els.digits, "data-digits", event);
+            if (!button) {
                 return;
             }
             state.digits = parseInt(button.getAttribute("data-digits"), 10);
             storeSet(STORAGE_KEYS.digits, String(state.digits));
             renderDigits();
             updatePreview();
+        });
+
+        els.format.addEventListener("click", function (event) {
+            var button = clickedSegButton(els.format, "data-format", event);
+            if (!button || state.busy) {
+                return;
+            }
+            var format = button.getAttribute("data-format") === FORMAT_JPG ? FORMAT_JPG : FORMAT_PNG;
+            if (format === state.format) {
+                return;
+            }
+            state.format = format;
+            storeSet(STORAGE_KEYS.format, format);
+            renderFormat();
+            setStatus("info", format === FORMAT_JPG
+                ? "JPG 导出：透明区域会填成白色，质量可在上方调整。"
+                : "PNG 导出：保留透明通道。");
+            updatePreview();
+            invalidateEstimate();
+        });
+
+        els.quality.addEventListener("input", function () {
+            var quality = parseInt(els.quality.value, 10);
+            state.quality = (quality >= 0 && quality <= 12) ? quality : 10;
+            renderQuality();
+        });
+        els.quality.addEventListener("change", function () {
+            // Only a released slider re-estimates; dragging is just a label.
+            storeSet(STORAGE_KEYS.quality, String(state.quality));
+            invalidateEstimate();
+        });
+
+        els.numbering.addEventListener("click", function (event) {
+            var button = clickedSegButton(els.numbering, "data-numbering", event);
+            if (!button || state.busy) {
+                return;
+            }
+            state.numbering = button.getAttribute("data-numbering") === "separate"
+                ? "separate"
+                : "shared";
+            storeSet(STORAGE_KEYS.numbering, state.numbering);
+            renderSettings();
+            setStatus("info", state.numbering === "separate"
+                ? "编号策略：PNG 与 JPG 各自计数。"
+                : "编号策略：PNG 与 JPG 共用同一个序列。");
+            updatePreview();
+        });
+
+        els.folderMode.addEventListener("click", function (event) {
+            var button = clickedSegButton(els.folderMode, "data-folder-mode", event);
+            if (!button || state.busy) {
+                return;
+            }
+            state.folderMode = button.getAttribute("data-folder-mode") === "last"
+                ? "last"
+                : "document";
+            storeSet(STORAGE_KEYS.folderMode, state.folderMode);
+            state.folderEdited = false;
+            if (state.folderMode === "last" && state.lastFolder) {
+                state.folder = state.lastFolder;
+                state.folderSource = "last";
+                storeSet(STORAGE_KEYS.folder, state.folder);
+                renderFolder();
+                updatePreview();
+            }
+            renderSettings();
+            setStatus("info", state.folderMode === "document"
+                ? "输出目录：打开已保存的文档时自动跟随它所在的文件夹。"
+                : "输出目录：沿用上次导出用过的文件夹。");
+            refreshDocument();
         });
 
         els.pick.addEventListener("click", pickFolder);
@@ -617,11 +936,8 @@
         });
 
         els.mode.addEventListener("click", function (event) {
-            var button = event.target;
-            while (button && button !== els.mode && !button.getAttribute("data-mode")) {
-                button = button.parentNode;
-            }
-            if (!button || button === els.mode || state.busy) {
+            var button = clickedSegButton(els.mode, "data-mode", event);
+            if (!button || state.busy) {
                 return;
             }
             var mode = button.getAttribute("data-mode");
@@ -632,8 +948,11 @@
             storeSet(STORAGE_KEYS.mode, mode);
             renderMode();
             setStatus("info", mode === "selection"
-                ? "选中图层模式：在 Photoshop 中选中若干图层或组，导出的每张 PNG 只显示一个对象。"
-                : "整图模式：导出一张包含全部可见图层的 PNG。");
+                ? "选中图层模式：在 Photoshop 中选中若干图层或组，导出的每张图片只显示一个对象。"
+                : "整图模式：导出一张包含全部可见图层的图片。");
+            if (mode === "document") {
+                invalidateEstimate();
+            }
             updatePreview();
         });
 
@@ -655,12 +974,19 @@
         els.prefix = byId("prefix");
         els.prefixNote = byId("prefix-note");
         els.digits = byId("digits");
+        els.format = byId("format");
+        els.qualityRow = byId("quality-row");
+        els.quality = byId("quality");
+        els.qualityValue = byId("quality-value");
         els.folderPath = byId("folder-path");
+        els.folderSource = byId("folder-source");
         els.pick = byId("pick-folder");
         els.exportBtn = byId("export");
         els.status = byId("status");
         els.nextFile = byId("next-file");
         els.nextHint = byId("next-hint");
+        els.estimateRow = byId("estimate-row");
+        els.estimateValue = byId("estimate-value");
         els.docInfo = byId("doc-info");
         els.mockNote = byId("mock-note");
         els.last = byId("last-export");
@@ -674,20 +1000,25 @@
         els.refreshSelection = byId("refresh-selection");
         els.batchDetails = byId("batch-details");
         els.batchDetailsBody = byId("batch-details-body");
+        els.settings = byId("settings");
+        els.numbering = byId("numbering");
+        els.folderMode = byId("folder-mode");
 
         restoreState();
         bindEvents();
 
         els.prefix.value = state.prefix;
         renderDigits();
+        renderFormat();
         renderFolder();
+        renderSettings();
         renderMode();
         CEPBridge.applyTheme();
         if (CEPBridge.isMock()) {
             els.mockNote.classList.remove("hidden");
         }
 
-        setStatus("", "就绪。填写前缀、选好目录即可导出 PNG。");
+        setStatus("", "就绪。填写前缀、选好目录即可导出 PNG 或 JPG。");
         refreshDocument();
         updatePreview();
 

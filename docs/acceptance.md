@@ -5,7 +5,61 @@
 
 本文只记录**实际跑过的验证**；没有跑过的项目在文末「未验证」里明确列出。
 
-## 1. 自动化单元测试（全部通过）
+## 1.2.0 验收（2026-11-11，最新）
+
+环境：Windows，Adobe Photoshop CC 2019 20.0.10（CEP 9），Node.js v24.15.0。
+
+### 自动化测试
+
+```powershell
+node scripts/build-host.mjs --check
+node --test --test-isolation=none "tests/*.test.mjs"
+```
+
+- `build-host --check` 输出 `jsx/host.jsx is up to date.`，退出码 0；
+- **82 项测试全部通过**（0 失败；1.1.0 时为 61 项）。新增覆盖：格式 / 扩展名归一化、
+  JPG 质量校验（0–12 整数，字符串 / 越界 / 小数报错）、共用与分开编号
+  （`.png` / `.jpg` / `.JPG` / `.jpeg`、中文百分号编码前缀）、`buildBatchNames` 的格式参数、
+  面板目录跟随状态机（`tests/panel-folder.test.mjs` 9 项）、格式 / 质量 / 设置区 DOM 与
+  mock 一致性、清单版本与 `package.json` 一致性。
+
+### 真实 Photoshop 验收
+
+JPG 新增脚本 [`scripts/verify-jpg-photoshop.ps1`](../scripts/verify-jpg-photoshop.ps1) +
+[`tests/photoshop/jpg-acceptance.jsx`](../tests/photoshop/jpg-acceptance.jsx)，
+结果 **43/43 通过（`ALL JPG CHECKS PASSED`）**：
+
+| 覆盖项 | 结果 |
+| --- | --- |
+| 共用序列：种子里有 `-03.png`，导出 JPG 得到 `-04.jpg` | PASS |
+| 按格式分开：同目录导出 JPG 从 `-01.jpg` 开始 | PASS |
+| 共用序列统计 `.JPG` / `.jpeg` 大小写变体，下一张 `-05.jpg` | PASS |
+| 不覆盖：预置 `-01.jpg` 内容保留，导出写 `-02.jpg` | PASS |
+| JPG 预估大小与实际导出字节一致（≤16 字节偏差） | PASS |
+| PNG 预估大小与实际导出字节一致（≤16 字节偏差） | PASS |
+| 质量 12 的文件明显大于质量 2（>1.5 倍） | PASS |
+| 质量 13 返回 `BAD_QUALITY` | PASS |
+| 透明区域导出后为白色 `(255,255,255)`，红色内容保留 | PASS |
+| 导出文件为 JPEG（SOI `FF D8 FF`） | PASS |
+| 16 位 / CMYK 文档：`converted:true` + 警告，源文档未被修改 | PASS |
+| 批量选中图层导出 JPG：正常对象 3 张（编号 1–3），空图层 / 空组跳过且不占编号 | PASS |
+| 已保存 PSD 的 `status.path` 等于其所在文件夹，导出到该目录成功 | PASS |
+| 导出与预估后 `app.displayDialogs` 恢复 | PASS |
+| 预估临时文件（`Folder.temp\qpe-estimate-*`）与输出目录无残留 | PASS |
+
+PNG 回归：`scripts/verify-photoshop.ps1` **24/24 通过**，
+`scripts/verify-batch-photoshop.ps1` **34/34 通过**，1.1.0 行为未回退。
+
+### 界面视觉检查
+
+浏览器 mock 截图（playwright-core + 本机 Chrome，320×760 视口，2x）保存在
+`.tmp/visual-check/`：`01-dark-document-png-collapsed.png`、
+`02-dark-document-jpg-settings.png`、`03-dark-document-jpg-quality6.png`、
+`04-dark-selection-jpg.png`、`05-light-selection-jpg.png`、
+`06-light-document-png-collapsed.png`。深色 / 浅色主题均无横向溢出
+（scrollWidth = clientWidth），设置区展开后正常增高。以下是 1.1.0 及更早的记录。
+
+## 1. 自动化单元测试（1.1.0，全部通过）
 
 ```powershell
 node scripts/build-host.mjs                                   # 生成 jsx/host.jsx
@@ -149,6 +203,12 @@ Close them and rerun this script so your work is never touched.
 13. 选中一个有剪贴蒙版内容、且该内容在选中范围之外的图层 → 该项被跳过并说明原因；
 14. 连续导出两次 → 第二批从第一批的最大编号继续，不覆盖、不补空洞；
 15. 导出选中图层后 → 源文档仍保持原样（图层可见性、选择、活动文档都不变）。
+16. 切换 PNG / JPG → 质量行只在 JPG 出现，主按钮文案跟着变；
+17. 拖动 JPG 质量滑块 → 松手后「预计大小」重新计算；质量 2 与 12 导出的文件大小明显不同；
+18. 切到「按格式分开」→ 同一目录下 PNG 与 JPG 各自从 1 计数；切回「共用序列」→ 接续同一序号；
+19. 打开已保存的 PSD → 输出目录自动变成文档所在文件夹；手动换目录后等几秒不被覆盖；
+    切换到另一条文档 → 重新跟随新文档目录；
+20. 导出 JPG 后检查透明区域为白色、源文档图层与透明度未变，且没有残留临时文件。
 
 ## 6. 图层批量导出真机验收（34 项检查全部通过）
 
@@ -199,4 +259,5 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-batch-photoshop.ps1
 - **部分失败注入**：没有人为制造「中途保存失败」来验证「失败即停 + 保留已成功文件 + 重启后续号」，
   该逻辑由 Node 测试和代码路径覆盖。
 - **真实 CEP 面板交互**：自动化验收验证的是宿主逻辑与像素结果；模式切换、列表渲染、
-  按钮点击需安装后在 Photoshop 里人工点一遍（见第 5 节第 10–15 条）。
+  按钮点击需安装后在 Photoshop 里人工点一遍（见第 5 节第 10–15 条）。1.2.0 的格式切换、
+  JPG 质量、预估大小与目录跟随另见第 5 节第 16–20 条。

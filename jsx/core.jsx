@@ -11,11 +11,17 @@
  *   validatePrefix(raw)                       -> {ok, prefix} | {ok:false, code, message, chars}
  *   isValidDigits(digits)                     -> boolean
  *   padNumber(number, digits)                 -> string (minimum width, never truncated)
- *   buildFileName(prefix, digits, number)     -> "prefix-01.png"
- *   buildMatcher(prefix, caseInsensitive)     -> RegExp ^prefix-(\d+)\.png$
- *   matchSequence(fileName, prefix, caseInsensitive) -> number | null
- *   computeNext(fileNames, prefix, caseInsensitive)  -> {nextNumber, maxNumber, existingCount}
- *   computeExport(fileNames, prefix, digits, caseInsensitive) -> {nextNumber, maxNumber, existingCount, fileName}
+ *   normalizeFormat(value)                    -> "png" | "jpg"
+ *   formatExtension(value)                    -> ".png" | ".jpg"
+ *   normalizeNumbering(value)                 -> "shared" | "separate"
+ *   isValidJpegQuality(value)                 -> boolean (number, integer 0-12)
+ *   normalizeJpegQuality(value)               -> valid quality, default 10
+ *   buildFileName(prefix, digits, number, format) -> "prefix-01.png" / "prefix-01.jpg"
+ *   buildMatcher(prefix, caseInsensitive, options) -> RegExp
+ *       options = {format: "png"|"jpg", numbering: "shared"|"separate"}
+ *   matchSequence(fileName, prefix, caseInsensitive, options) -> number | null
+ *   computeNext(fileNames, prefix, caseInsensitive, options)  -> {nextNumber, maxNumber, existingCount}
+ *   computeExport(fileNames, prefix, digits, caseInsensitive, options) -> {nextNumber, maxNumber, existingCount, fileName}
  *   compareLayerPaths(left, right)            -> number (panel order, top to bottom)
  *   orderSelectedLayers(items, selectedIds)   -> panel-order records, selected ancestors win
  *   buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) -> {startNumber, names, ...}
@@ -31,6 +37,11 @@ var QPECore = (function () {
         "tif", "tiff", "webp", "pdf"];
     var MAX_PREFIX_LENGTH = 120;
     var VALID_DIGITS = [1, 2, 3];
+    var DEFAULT_FORMAT = "png";
+    var DEFAULT_NUMBERING = "shared";
+    var JPEG_QUALITY_MIN = 0;
+    var JPEG_QUALITY_MAX = 12;
+    var DEFAULT_JPEG_QUALITY = 10;
 
     /* ---------- helpers ---------- */
 
@@ -76,18 +87,27 @@ var QPECore = (function () {
         return out;
     }
 
-    function buildMatcher(prefix, caseInsensitive) {
+    function buildMatcher(prefix, caseInsensitive, options) {
+        var format = normalizeFormat(options ? options.format : null);
+        var numbering = normalizeNumbering(options ? options.numbering : null);
+        var extensionPattern;
+        if (numbering === "separate") {
+            extensionPattern = (format === "jpg") ? "jpe?g" : "png";
+        } else {
+            // Shared sequence: PNG and JPG (including .jpeg) count together.
+            extensionPattern = "png|jpe?g";
+        }
         var flags = (caseInsensitive === false) ? "" : "i";
-        return new RegExp("^" + escapeRegExp(prefix) + "-(\\d+)\\.png$", flags);
+        return new RegExp("^" + escapeRegExp(prefix) + "-(\\d+)\\.(" + extensionPattern + ")$", flags);
     }
 
-    function matchSequence(fileName, prefix, caseInsensitive) {
+    function matchSequence(fileName, prefix, caseInsensitive, options) {
         if (!isString(fileName) || !isString(prefix)) {
             return null;
         }
         // ExtendScript percent-encodes non-ASCII File.name values (verified on
         // Photoshop CC 2019), so matching runs on the decoded, readable name.
-        var matched = buildMatcher(prefix, caseInsensitive).exec(decodePercentName(fileName));
+        var matched = buildMatcher(prefix, caseInsensitive, options).exec(decodePercentName(fileName));
         if (!matched) {
             return null;
         }
@@ -210,18 +230,56 @@ var QPECore = (function () {
         return indexOfValue(VALID_DIGITS, value) !== -1;
     }
 
-    /* ---------- sequencing ---------- */
+    /* ---------- format / numbering / JPEG quality ---------- */
 
-    function buildFileName(prefix, digits, number) {
-        return prefix + "-" + padNumber(number, digits) + ".png";
+    function normalizeFormat(value) {
+        if (!isString(value)) {
+            return DEFAULT_FORMAT;
+        }
+        var text = value.toLowerCase();
+        return (text === "jpg" || text === "jpeg") ? "jpg" : DEFAULT_FORMAT;
     }
 
-    function computeNext(fileNames, prefix, caseInsensitive) {
+    function formatExtension(value) {
+        return normalizeFormat(value) === "jpg" ? ".jpg" : ".png";
+    }
+
+    function normalizeNumbering(value) {
+        if (isString(value) && value.toLowerCase() === "separate") {
+            return "separate";
+        }
+        return DEFAULT_NUMBERING;
+    }
+
+    // JPEGSaveOptions.quality accepts an integer 0-12 only. Strings such as
+    // "10" are rejected on purpose: the host payload is JSON-generated, so a
+    // non-number means a caller bug that should fail loudly (BAD_QUALITY).
+    function isValidJpegQuality(value) {
+        if (typeof value !== "number" || !isFinite(value)) {
+            return false;
+        }
+        if (value < JPEG_QUALITY_MIN || value > JPEG_QUALITY_MAX) {
+            return false;
+        }
+        return Math.floor(value) === value;
+    }
+
+    function normalizeJpegQuality(value) {
+        return isValidJpegQuality(value) ? value : DEFAULT_JPEG_QUALITY;
+    }
+
+    /* ---------- sequencing ---------- */
+
+    function buildFileName(prefix, digits, number, format) {
+        return prefix + "-" + padNumber(number, digits) + formatExtension(format);
+    }
+
+    function computeNext(fileNames, prefix, caseInsensitive, options) {
         var maxNumber = 0;
         var existingCount = 0;
         var names = fileNames || [];
         for (var i = 0; i < names.length; i++) {
-            var number = matchSequence(names[i], prefix, caseInsensitive);
+            var number = matchSequence(names[i], prefix, caseInsensitive, options);
             if (number !== null) {
                 existingCount++;
                 if (number > maxNumber) {
@@ -236,13 +294,13 @@ var QPECore = (function () {
         };
     }
 
-    function computeExport(fileNames, prefix, digits, caseInsensitive) {
-        var next = computeNext(fileNames, prefix, caseInsensitive);
+    function computeExport(fileNames, prefix, digits, caseInsensitive, options) {
+        var next = computeNext(fileNames, prefix, caseInsensitive, options);
         return {
             nextNumber: next.nextNumber,
             maxNumber: next.maxNumber,
             existingCount: next.existingCount,
-            fileName: buildFileName(prefix, digits, next.nextNumber)
+            fileName: buildFileName(prefix, digits, next.nextNumber, options ? options.format : null)
         };
     }
 
@@ -315,15 +373,15 @@ var QPECore = (function () {
     // Expected names for the next `count` exports. This is only a plan: the
     // host re-scans the folder before every save, so skipped objects do not
     // consume a number.
-    function buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) {
-        var next = computeNext(fileNames, prefix, caseInsensitive);
+    function buildBatchNames(fileNames, prefix, digits, count, caseInsensitive, options) {
+        var next = computeNext(fileNames, prefix, caseInsensitive, options);
         var total = 0;
         if (typeof count === "number" && isFinite(count) && count > 0) {
             total = Math.floor(count);
         }
         var names = [];
         for (var i = 0; i < total; i++) {
-            names[i] = buildFileName(prefix, digits, next.nextNumber + i);
+            names[i] = buildFileName(prefix, digits, next.nextNumber + i, options ? options.format : null);
         }
         return {
             startNumber: next.nextNumber,
@@ -468,6 +526,11 @@ var QPECore = (function () {
     return {
         ILLEGAL_CHARS: ILLEGAL_CHARS,
         MAX_PREFIX_LENGTH: MAX_PREFIX_LENGTH,
+        JPEG_QUALITY_MIN: JPEG_QUALITY_MIN,
+        JPEG_QUALITY_MAX: JPEG_QUALITY_MAX,
+        DEFAULT_JPEG_QUALITY: DEFAULT_JPEG_QUALITY,
+        DEFAULT_FORMAT: DEFAULT_FORMAT,
+        DEFAULT_NUMBERING: DEFAULT_NUMBERING,
         trimText: trimText,
         decodePercentName: decodePercentName,
         derivePrefixFromDocument: derivePrefixFromDocument,
@@ -475,6 +538,11 @@ var QPECore = (function () {
         validatePrefix: validatePrefix,
         isValidDigits: isValidDigits,
         padNumber: padNumber,
+        normalizeFormat: normalizeFormat,
+        formatExtension: formatExtension,
+        normalizeNumbering: normalizeNumbering,
+        isValidJpegQuality: isValidJpegQuality,
+        normalizeJpegQuality: normalizeJpegQuality,
         buildFileName: buildFileName,
         buildMatcher: buildMatcher,
         matchSequence: matchSequence,

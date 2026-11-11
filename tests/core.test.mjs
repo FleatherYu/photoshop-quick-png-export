@@ -105,7 +105,6 @@ test("matchSequence rejects near-miss names", () => {
   const prefix = "261028-123";
   for (const name of [
     "261028-123-old.png",
-    "261028-123-01.jpg",
     "261028-123-01-copy.png",
     "261028-1234-01.png",
     "other-01.png",
@@ -147,7 +146,6 @@ test("computeNext ignores non-matching files and other prefixes", () => {
   const prefix = "261028-123";
   const files = [
     "261028-123-old.png",
-    "261028-123-01.jpg",
     "261028-1234-01.png",
     "readme.txt",
     "261028-123-05.png",
@@ -157,6 +155,118 @@ test("computeNext ignores non-matching files and other prefixes", () => {
   assert.equal(result.nextNumber, 6);
   assert.equal(result.maxNumber, 5);
   assert.equal(result.existingCount, 1);
+});
+
+/* ---------- export format, numbering strategies and JPEG quality ---------- */
+
+test("normalizeFormat maps jpg/jpeg to jpg and everything else to png", () => {
+  assert.equal(core.normalizeFormat("png"), "png");
+  assert.equal(core.normalizeFormat("PNG"), "png");
+  assert.equal(core.normalizeFormat("jpg"), "jpg");
+  assert.equal(core.normalizeFormat("JPG"), "jpg");
+  assert.equal(core.normalizeFormat("jpeg"), "jpg");
+  assert.equal(core.normalizeFormat("webp"), "png");
+  assert.equal(core.normalizeFormat(null), "png");
+  assert.equal(core.normalizeFormat(undefined), "png");
+});
+
+test("formatExtension returns the lowercase export extension", () => {
+  assert.equal(core.formatExtension("png"), ".png");
+  assert.equal(core.formatExtension("jpg"), ".jpg");
+  assert.equal(core.formatExtension("JPEG"), ".jpg");
+});
+
+test("normalizeNumbering defaults to shared and accepts separate", () => {
+  assert.equal(core.normalizeNumbering("shared"), "shared");
+  assert.equal(core.normalizeNumbering("separate"), "separate");
+  assert.equal(core.normalizeNumbering("SEPARATE"), "separate");
+  assert.equal(core.normalizeNumbering("nonsense"), "shared");
+  assert.equal(core.normalizeNumbering(undefined), "shared");
+});
+
+test("isValidJpegQuality accepts only integer numbers from 0 to 12", () => {
+  for (const good of [0, 1, 6, 10, 12]) {
+    assert.equal(core.isValidJpegQuality(good), true, String(good));
+  }
+  for (const bad of [-1, 13, 3.5, NaN, Infinity, "10", null, undefined, true]) {
+    assert.equal(core.isValidJpegQuality(bad), false, String(bad));
+  }
+});
+
+test("normalizeJpegQuality falls back to the default 10", () => {
+  assert.equal(core.normalizeJpegQuality(2), 2);
+  assert.equal(core.normalizeJpegQuality(12), 12);
+  assert.equal(core.normalizeJpegQuality(undefined), 10);
+  assert.equal(core.normalizeJpegQuality(99), 10);
+});
+
+test("buildFileName appends the requested format extension", () => {
+  assert.equal(core.buildFileName("p", 2, 1, "png"), "p-01.png");
+  assert.equal(core.buildFileName("p", 2, 1, "jpg"), "p-01.jpg");
+  assert.equal(core.buildFileName("p", 2, 1), "p-01.png");
+});
+
+test("shared numbering counts PNG, JPG and JPEG files together", () => {
+  const options = { format: "png", numbering: "shared" };
+  const files = ["a-03.png", "a-01.jpg", "a-02.JPEG"];
+  const next = core.computeNext(files, "a", true, options);
+  assert.equal(next.maxNumber, 3);
+  assert.equal(next.existingCount, 3);
+  assert.equal(next.nextNumber, 4);
+  assert.equal(core.computeExport(files, "a", 2, true, options).fileName, "a-04.png");
+
+  const jpgExport = core.computeExport(files, "a", 2, true, {
+    format: "jpg",
+    numbering: "shared",
+  });
+  assert.equal(jpgExport.fileName, "a-04.jpg");
+});
+
+test("separate numbering only counts the current export format", () => {
+  const files = ["a-03.png", "a-01.jpg", "a-02.jpeg"];
+  const pngOptions = { format: "png", numbering: "separate" };
+  assert.equal(core.computeNext(files, "a", true, pngOptions).nextNumber, 4);
+  assert.equal(core.computeNext(["a-03.png", "a-09.jpg"], "a", true, pngOptions).nextNumber, 4);
+
+  const jpgOptions = { format: "jpg", numbering: "separate" };
+  const jpgNext = core.computeNext(files, "a", true, jpgOptions);
+  assert.equal(jpgNext.maxNumber, 2);
+  assert.equal(jpgNext.existingCount, 2);
+  assert.equal(jpgNext.nextNumber, 3);
+  assert.equal(core.computeExport(files, "a", 2, true, jpgOptions).fileName, "a-03.jpg");
+
+  // A directory with only PNGs still yields 1 for the separate JPG strategy.
+  assert.equal(core.computeNext(["a-05.png"], "a", true, jpgOptions).nextNumber, 1);
+});
+
+test("shared numbering decodes percent-encoded Chinese prefixes for JPG", () => {
+  const files = ["QPE-%E6%B5%8B%E8%AF%95-03.jpg", "QPE-%E6%B5%8B%E8%AF%95-04.png"];
+  const next = core.computeNext(files, "QPE-测试", true, { format: "jpg", numbering: "shared" });
+  assert.equal(next.maxNumber, 4);
+  assert.equal(next.nextNumber, 5);
+});
+
+test("buildBatchNames follows the requested format and numbering strategy", () => {
+  const files = ["a-03.png", "a-07.jpg"];
+  const sharedJpg = core.buildBatchNames(files, "a", 2, 2, true, {
+    format: "jpg",
+    numbering: "shared",
+  });
+  assert.equal(sharedJpg.startNumber, 8);
+  assert.deepEqual([...sharedJpg.names], ["a-08.jpg", "a-09.jpg"]);
+
+  const separateJpg = core.buildBatchNames(files, "a", 2, 2, true, {
+    format: "jpg",
+    numbering: "separate",
+  });
+  assert.equal(separateJpg.startNumber, 8);
+
+  const separatePng = core.buildBatchNames(files, "a", 2, 1, true, {
+    format: "png",
+    numbering: "separate",
+  });
+  assert.equal(separatePng.startNumber, 4);
+  assert.deepEqual([...separatePng.names], ["a-04.png"]);
 });
 
 test("digits do not reset the numbering across 1/01/001", () => {

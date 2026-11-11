@@ -56,11 +56,30 @@ test("styles define the theme variables the panel toggles", () => {
 });
 
 test("panel UI carries the required labels and behaviours", () => {
-  for (const label of ["前缀", "位数", "输出目录", "导出名称", "快速导出 PNG"]) {
+  for (const label of [
+    "前缀", "位数", "输出目录", "导出名称", "快速导出 PNG",
+    "格式", "质量", "预计大小", "编号策略", "跟随文档", "记住上次"
+  ]) {
     assert.ok(html.includes(label), `missing UI text: ${label}`);
   }
   // No overwrite is enforced by the host: the panel must never send a name.
   assert.equal(/exportPng[\s\S]{0,200}?fileName/.test(panel), false);
+});
+
+test("format, quality and settings controls match the host contract", () => {
+  assert.match(html, /data-format="png"/);
+  assert.match(html, /data-format="jpg"/);
+  const quality = /<input id="quality"[^>]*>/.exec(html);
+  assert.ok(quality, "quality slider not found");
+  assert.match(quality[0], /type="range"/);
+  assert.match(quality[0], /min="0"/);
+  assert.match(quality[0], /max="12"/);
+  assert.match(quality[0], /step="1"/);
+  // The settings section starts collapsed.
+  assert.match(html, /<details id="settings" class="settings">/);
+  assert.match(panel, /CEPBridge\.call\("estimateSize"/);
+  assert.ok(panel.includes("正在估算…"));
+  assert.ok(panel.includes("无法估算"));
 });
 
 test("typing a prefix stops the document-name default from being re-applied", () => {

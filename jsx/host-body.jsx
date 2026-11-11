@@ -8,8 +8,9 @@
  *
  * Entry point used by the panel:
  *   QPE_call(method, argsJson) -> JSON string
- * Methods: status / preview / exportPng / previewSelectedLayers /
- *          exportSelectedLayers / pickFolder / openFolder
+ * Methods: status / preview / exportImage / estimateSize / exportPng (legacy
+ *          PNG-only alias) / previewSelectedLayers / exportSelectedLayers /
+ *          pickFolder / openFolder
  */
 
 var QPE = (function () {
@@ -70,7 +71,7 @@ var QPE = (function () {
     // ExtendScript percent-encodes non-ASCII characters of File.name as UTF-8
     // (verified on Photoshop CC 2019 with Chinese prefixes: "QPE-%E6%B5%8B...").
     // Raw names are kept here; QPECore.matchSequence decodes them before matching.
-    function listPngNames(folder) {
+    function listFileNames(folder) {
         var names = [];
         var entries;
         try {
@@ -190,6 +191,77 @@ var QPE = (function () {
         return info;
     }
 
+    /* ---------- export options shared by preview / export / estimate ---------- */
+
+    function exportFormat(args) {
+        return QPECore.normalizeFormat(args.format);
+    }
+
+    function scanOptions(args) {
+        return {
+            format: QPECore.normalizeFormat(args.format),
+            numbering: QPECore.normalizeNumbering(args.numbering)
+        };
+    }
+
+    function qualityError(format, quality) {
+        if (format !== "jpg") {
+            return null;
+        }
+        if (!QPECore.isValidJpegQuality(quality)) {
+            return fail("BAD_QUALITY", "JPG 质量必须是 0–12 的整数");
+        }
+        return null;
+    }
+
+    function saveOptionsFor(format, quality) {
+        if (format === "jpg") {
+            var jpeg = new JPEGSaveOptions();
+            jpeg.quality = QPECore.normalizeJpegQuality(quality);
+            return jpeg;
+        }
+        var png = new PNGSaveOptions();
+        png.interlaced = false;
+        return png;
+    }
+
+    // Finds the next file name that does not exist yet. The numbering rules
+    // live in QPECore so the panel preview and the host always agree.
+    function nextFreeTarget(folder, prefix, digits, caseInsensitive, options) {
+        var fileName = "";
+        var fullPath = "";
+        var number = 0;
+        var maxNumber = 0;
+        var existingCount = 0;
+        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+            var files = listFileNames(folder);
+            var computed = QPECore.computeExport(files, prefix, digits, caseInsensitive, options);
+            number = computed.nextNumber;
+            maxNumber = computed.maxNumber;
+            existingCount = computed.existingCount;
+            fileName = computed.fileName;
+            fullPath = joinPath(folder.fsName, fileName);
+            if (!new File(fullPath).exists) {
+                break;
+            }
+        }
+        if (new File(fullPath).exists) {
+            return {
+                ok: false,
+                code: "COLLISION",
+                message: "目标文件已存在且无法自动分配序号：" + fileName
+            };
+        }
+        return {
+            ok: true,
+            number: number,
+            maxNumber: maxNumber,
+            existingCount: existingCount,
+            fileName: fileName,
+            fullPath: fullPath
+        };
+    }
+
     /* ---------- status ---------- */
 
     function status() {
@@ -225,7 +297,7 @@ var QPE = (function () {
             // called, but flag that the number is not based on a real scan.
             return {
                 ok: true,
-                fileName: QPECore.buildFileName(prefixCheck.prefix, args.digits, 1),
+                fileName: QPECore.buildFileName(prefixCheck.prefix, args.digits, 1, exportFormat(args)),
                 nextNumber: 1,
                 maxNumber: 0,
                 existingCount: 0,
@@ -236,8 +308,8 @@ var QPE = (function () {
         if (!folder) {
             return fail("FOLDER_MISSING", "输出文件夹不存在或无法访问：" + args.folder);
         }
-        var files = listPngNames(folder);
-        var computed = QPECore.computeExport(files, prefixCheck.prefix, args.digits, true);
+        var files = listFileNames(folder);
+        var computed = QPECore.computeExport(files, prefixCheck.prefix, args.digits, true, scanOptions(args));
         return {
             ok: true,
             fileName: computed.fileName,
@@ -258,7 +330,38 @@ var QPE = (function () {
         }
     }
 
-    function convertCopyForPng(doc) {
+    // A JPG has no alpha channel, so transparent areas have to become white.
+    // This always happens on the temporary copy: the source document keeps its
+    // layers, visibility, mode and bit depth.
+    //
+    // Flattening fills transparency with white; when the copy has no Background
+    // layer an explicit white layer is added at the bottom first so the result
+    // is white regardless of the application's background colour. Documents
+    // that already have a Background layer are opaque and only need flattening.
+    function fillWhiteAndFlatten(copy) {
+        var hasBackground = false;
+        try {
+            hasBackground = copy.backgroundLayer !== null && typeof copy.backgroundLayer !== "undefined";
+        } catch (backgroundError) {
+            hasBackground = false;
+        }
+        if (!hasBackground) {
+            var white = new SolidColor();
+            white.rgb.red = 255;
+            white.rgb.green = 255;
+            white.rgb.blue = 255;
+            var background = copy.artLayers.add();
+            background.name = "QPE-white-background";
+            background.move(copy, ElementPlacement.PLACEATEND);
+            copy.activeLayer = background;
+            copy.selection.selectAll();
+            copy.selection.fill(white);
+            copy.selection.deselect();
+        }
+        copy.flatten();
+    }
+
+    function prepareCopyForExport(doc, format) {
         var warnings = [];
         var copy = doc.duplicate("QuickPNG-temp");
         try {
@@ -267,6 +370,9 @@ var QPE = (function () {
             }
             if (copy.mode !== DocumentMode.RGB) {
                 copy.mode = DocumentMode.RGB;
+            }
+            if (format === "jpg") {
+                fillWhiteAndFlatten(copy);
             }
         } catch (conversionError) {
             try {
@@ -277,14 +383,16 @@ var QPE = (function () {
             throw conversionError;
         }
 
-        var originalMode = modeName(doc.mode);
-        var originalDepth = bitDepthName(doc.bitsPerChannel);
-        warnings[warnings.length] =
-            "原文档为 " + originalMode + " / " + originalDepth +
-            " 位，已在临时副本中转换为 RGB / 8 位后导出（颜色可能有偏移，源文档未被修改）";
-        if (originalMode !== "RGB") {
+        if (needsConversion(doc)) {
+            var originalMode = modeName(doc.mode);
+            var originalDepth = bitDepthName(doc.bitsPerChannel);
             warnings[warnings.length] =
-                "原文档没有透明通道；转换为 RGB 后透明区域会变为白色/背景色";
+                "原文档为 " + originalMode + " / " + originalDepth +
+                " 位，已在临时副本中转换为 RGB / 8 位后导出（颜色可能有偏移，源文档未被修改）";
+            if (originalMode !== "RGB") {
+                warnings[warnings.length] =
+                    "原文档没有透明通道；转换为 RGB 后透明区域会变为白色/背景色";
+            }
         }
         return {
             copy: copy,
@@ -292,7 +400,7 @@ var QPE = (function () {
         };
     }
 
-    function exportPng(args) {
+    function exportImage(args) {
         if (app.documents.length === 0) {
             return fail("NO_DOCUMENT", "请先打开一个 Photoshop 文档");
         }
@@ -307,8 +415,14 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "序号位数只能是 1、2 或 3 位");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
         if (!args.folder) {
-            return fail("NO_FOLDER", "请选择 PNG 输出文件夹");
+            return fail("NO_FOLDER", "请选择输出文件夹");
         }
         var folder = folderFromPath(args.folder);
         if (!folder) {
@@ -321,29 +435,18 @@ var QPE = (function () {
 
         var prefix = prefixCheck.prefix;
         var digits = args.digits;
-        var maxNumber = 0;
-        var existingCount = 0;
-        var fileName = "";
-        var fullPath = "";
-        var number = 0;
 
         // Re-scan right before saving: the preview/predicted name is never
         // trusted for the final write.
-        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
-            var files = listPngNames(folder);
-            var computed = QPECore.computeExport(files, prefix, digits, true);
-            number = computed.nextNumber;
-            maxNumber = computed.maxNumber;
-            existingCount = computed.existingCount;
-            fileName = computed.fileName;
-            fullPath = joinPath(folder.fsName, fileName);
-            if (!new File(fullPath).exists) {
-                break;
-            }
+        var target = nextFreeTarget(folder, prefix, digits, true, options);
+        if (!target.ok) {
+            return fail(target.code, target.message);
         }
-        if (new File(fullPath).exists) {
-            return fail("COLLISION", "目标文件已存在且无法自动分配序号：" + fileName);
-        }
+        var number = target.number;
+        var maxNumber = target.maxNumber;
+        var existingCount = target.existingCount;
+        var fileName = target.fileName;
+        var fullPath = target.fullPath;
 
         var oldDialogs = app.displayDialogs;
         var copy = null;
@@ -352,18 +455,16 @@ var QPE = (function () {
         try {
             app.displayDialogs = DialogModes.NO;
 
-            var target = doc;
-            if (needsConversion(doc)) {
-                var prepared = convertCopyForPng(doc);
-                target = prepared.copy;
+            var saveTarget = doc;
+            if (needsConversion(doc) || format === "jpg") {
+                var prepared = prepareCopyForExport(doc, format);
+                saveTarget = prepared.copy;
                 copy = prepared.copy;
                 warnings = prepared.warnings;
-                converted = true;
+                converted = needsConversion(doc);
             }
 
-            var options = new PNGSaveOptions();
-            options.interlaced = false;
-            target.saveAs(new File(fullPath), options, true, Extension.LOWERCASE);
+            saveTarget.saveAs(new File(fullPath), saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
 
             if (copy) {
                 copy.close(SaveOptions.DONOTSAVECHANGES);
@@ -407,9 +508,119 @@ var QPE = (function () {
             number: number,
             maxNumber: maxNumber,
             existingCount: existingCount,
+            format: format,
+            quality: format === "jpg" ? QPECore.normalizeJpegQuality(args.quality) : null,
             converted: converted,
             warnings: warnings,
             document: doc.name
+        };
+    }
+
+    // Legacy PNG-only entry point kept for older panel builds and scripts.
+    function exportPng(args) {
+        args.format = "png";
+        return exportImage(args);
+    }
+
+    /* ---------- size estimate ---------- */
+
+    var ESTIMATE_TEMP_PREFIX = "qpe-estimate-";
+
+    // The estimate must never touch the output folder or the source document,
+    // so it saves with the exact same options to a throw-away system temp file.
+    function uniqueTempFile(extension) {
+        var tempFolder;
+        try {
+            tempFolder = Folder.temp;
+        } catch (tempError) {
+            return null;
+        }
+        if (!tempFolder || !tempFolder.fsName) {
+            return null;
+        }
+        var stamp = (new Date()).getTime();
+        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
+            var candidate = new File(joinPath(tempFolder.fsName,
+                ESTIMATE_TEMP_PREFIX + stamp + "-" + attempt + extension));
+            if (!candidate.exists) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    function estimateSize(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "请先打开一个 Photoshop 文档");
+        }
+        var doc = app.activeDocument;
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var tempFile = uniqueTempFile(QPECore.formatExtension(format));
+        if (!tempFile) {
+            return fail("ESTIMATE_FAILED", "无法创建临时文件用于估算");
+        }
+        var oldDialogs = app.displayDialogs;
+        var copy = null;
+        var bytes = 0;
+        try {
+            app.displayDialogs = DialogModes.NO;
+            var saveTarget = doc;
+            if (needsConversion(doc) || format === "jpg") {
+                var prepared = prepareCopyForExport(doc, format);
+                saveTarget = prepared.copy;
+                copy = prepared.copy;
+            }
+            saveTarget.saveAs(tempFile, saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
+            if (copy) {
+                copy.close(SaveOptions.DONOTSAVECHANGES);
+                copy = null;
+            }
+            try {
+                app.activeDocument = doc;
+            } catch (activateError) {
+                // ignore: the source document is still open and unchanged
+            }
+            var savedFile = new File(tempFile.fsName);
+            if (!savedFile.exists) {
+                return fail("ESTIMATE_FAILED", "估算后找不到临时文件");
+            }
+            bytes = savedFile.length;
+            if (bytes <= 0) {
+                return fail("ESTIMATE_FAILED", "估算结果为空文件");
+            }
+        } catch (estimateError) {
+            return fail("ESTIMATE_FAILED", "无法估算大小：" + errorText(estimateError));
+        } finally {
+            if (copy) {
+                try {
+                    copy.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeError) {
+                    // ignore
+                }
+                copy = null;
+            }
+            try {
+                if (tempFile.exists) {
+                    tempFile.remove();
+                }
+            } catch (removeError) {
+                // best effort: reporting is more useful than throwing here
+            }
+            try {
+                app.displayDialogs = oldDialogs;
+            } catch (dialogRestoreError) {
+                // ignore
+            }
+        }
+        return {
+            ok: true,
+            bytes: bytes,
+            format: format,
+            quality: format === "jpg" ? QPECore.normalizeJpegQuality(args.quality) : null
         };
     }
 
@@ -892,53 +1103,144 @@ var QPE = (function () {
         }
     }
 
-    // Saves the isolated temporary copy as a PNG with the next free number.
-    function saveBatchPng(workDoc, folder, prefix, digits) {
-        var fileName = "";
-        var fullPath = "";
-        var number = 0;
-        for (var attempt = 0; attempt < MAX_COLLISION_ATTEMPTS; attempt++) {
-            var files = listPngNames(folder);
-            var computed = QPECore.computeExport(files, prefix, digits, true);
-            number = computed.nextNumber;
-            fileName = computed.fileName;
-            fullPath = joinPath(folder.fsName, fileName);
-            if (!new File(fullPath).exists) {
-                break;
-            }
+    // Saves the isolated temporary copy as the next free file.
+    //
+    // PNG can be probed for transparency after saving (zero-area bounds mean an
+    // empty selection), but a JPEG has no alpha channel. For JPG the copy is
+    // therefore first written to a throw-away PNG, probed, and only a non-empty
+    // item is flattened onto white and written as JPG. Empty items never
+    // consume a number and never leave a file behind.
+    function saveBatchImage(workDoc, folder, prefix, digits, format, quality, options) {
+        if (format === "jpg") {
+            return saveBatchJpg(workDoc, folder, prefix, digits, quality, options);
         }
-        var file = new File(fullPath);
-        if (file.exists) {
-            return {
-                ok: false,
-                code: "COLLISION",
-                message: "目标文件已存在且无法自动分配序号：" + fileName
-            };
+        var target = nextFreeTarget(folder, prefix, digits, true, options);
+        if (!target.ok) {
+            return target;
         }
-        var options = new PNGSaveOptions();
-        options.interlaced = false;
-        workDoc.saveAs(file, options, true, Extension.LOWERCASE);
-        file = new File(fullPath);
+        workDoc.saveAs(new File(target.fullPath), saveOptionsFor("png", quality), true, Extension.LOWERCASE);
+        var file = new File(target.fullPath);
         if (!file.exists) {
             return {
                 ok: false,
                 code: "VERIFY_FAILED",
-                message: "导出后找不到输出文件：" + fullPath
+                message: "导出后找不到输出文件：" + target.fullPath
             };
         }
         if (file.length <= 0) {
             return {
                 ok: false,
                 code: "VERIFY_FAILED",
-                message: "导出的文件为空（0 字节）：" + fullPath
+                message: "导出的文件为空（0 字节）：" + target.fullPath
+            };
+        }
+        var probe = probePngHasPixels(file);
+        if (!probe.ok) {
+            return {
+                ok: false,
+                code: "ALPHA_CHECK_FAILED",
+                message: "无法检测导出结果的透明度：" + probe.message
             };
         }
         return {
             ok: true,
-            number: number,
-            fileName: fileName,
+            empty: !probe.hasPixels,
+            number: target.number,
+            fileName: target.fileName,
             file: file
         };
+    }
+
+    function saveBatchJpg(workDoc, folder, prefix, digits, quality, options) {
+        var tempPng = uniqueTempFile(".png");
+        if (!tempPng) {
+            return {
+                ok: false,
+                code: "TEMP_FAILED",
+                message: "无法创建临时文件用于检测空图层"
+            };
+        }
+        var probeDoc = null;
+        try {
+            workDoc.saveAs(tempPng, saveOptionsFor("png", quality), true, Extension.LOWERCASE);
+            probeDoc = app.open(tempPng);
+            var bounds = probeDoc.activeLayer.bounds;
+            var width = bounds[2].as("px") - bounds[0].as("px");
+            var height = bounds[3].as("px") - bounds[1].as("px");
+            if (!(width > 0 && height > 0)) {
+                return {
+                    ok: true,
+                    empty: true,
+                    number: 0,
+                    fileName: "",
+                    file: null
+                };
+            }
+
+            fillWhiteAndFlatten(probeDoc);
+
+            // The number is allocated only after the item is known to have
+            // pixels, so skipped items never consume a number.
+            var target = nextFreeTarget(folder, prefix, digits, true, options);
+            if (!target.ok) {
+                return target;
+            }
+            probeDoc.saveAs(new File(target.fullPath), saveOptionsFor("jpg", quality), true, Extension.LOWERCASE);
+            try {
+                probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+            } catch (closeError) {
+                // ignore
+            }
+            probeDoc = null;
+            try {
+                app.activeDocument = workDoc;
+            } catch (activateError) {
+                // ignore
+            }
+            var file = new File(target.fullPath);
+            if (!file.exists) {
+                return {
+                    ok: false,
+                    code: "VERIFY_FAILED",
+                    message: "导出后找不到输出文件：" + target.fullPath
+                };
+            }
+            if (file.length <= 0) {
+                return {
+                    ok: false,
+                    code: "VERIFY_FAILED",
+                    message: "导出的文件为空（0 字节）：" + target.fullPath
+                };
+            }
+            return {
+                ok: true,
+                empty: false,
+                number: target.number,
+                fileName: target.fileName,
+                file: file
+            };
+        } catch (saveError) {
+            return {
+                ok: false,
+                code: "SAVE_FAILED",
+                message: "导出失败：" + errorText(saveError)
+            };
+        } finally {
+            if (probeDoc) {
+                try {
+                    probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeProbeError) {
+                    // ignore
+                }
+            }
+            try {
+                if (tempPng.exists) {
+                    tempPng.remove();
+                }
+            } catch (removeError) {
+                // best effort: the caller reports visible problems
+            }
+        }
     }
 
     // Re-opens the just-saved PNG and reads its single layer bounds. A fully
@@ -1003,6 +1305,12 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "序号位数只能是 1、2 或 3 位");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
 
         var selection = readTargetLayerIds();
         if (!selection.ok) {
@@ -1039,10 +1347,10 @@ var QPE = (function () {
             if (!folder) {
                 return fail("FOLDER_MISSING", "输出文件夹不存在或无法访问：" + args.folder);
             }
-            files = listPngNames(folder);
+            files = listFileNames(folder);
             folderAvailable = true;
         }
-        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, exportable.length, true);
+        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, exportable.length, true, options);
         var items = [];
         for (i = 0; i < exportable.length; i++) {
             items[items.length] = {
@@ -1091,8 +1399,14 @@ var QPE = (function () {
         if (!QPECore.isValidDigits(args.digits)) {
             return fail("BAD_DIGITS", "序号位数只能是 1、2 或 3 位");
         }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
         if (!args.folder) {
-            return fail("NO_FOLDER", "请选择 PNG 输出文件夹");
+            return fail("NO_FOLDER", "请选择输出文件夹");
         }
         var folder = folderFromPath(args.folder);
         if (!folder) {
@@ -1187,7 +1501,8 @@ var QPE = (function () {
                     isolateRecord(workTarget, workIndex, visibleById);
 
                     phase = "save";
-                    var saved = saveBatchPng(workDoc, folder, prefixCheck.prefix, args.digits);
+                    var saved = saveBatchImage(workDoc, folder, prefixCheck.prefix, args.digits,
+                        format, args.quality, options);
                     if (!saved.ok) {
                         failed = {
                             id: target.id,
@@ -1199,30 +1514,18 @@ var QPE = (function () {
                         unprocessed = totalTargets - t - 1;
                         break;
                     }
-
-                    phase = "detect";
-                    var probe = probePngHasPixels(saved.file);
-                    if (!probe.ok) {
-                        failed = {
-                            id: target.id,
-                            name: target.name,
-                            phase: phase,
-                            code: "ALPHA_CHECK_FAILED",
-                            message: "无法检测导出结果的透明度：" + probe.message
-                        };
-                        unprocessed = totalTargets - t - 1;
-                        break;
-                    }
-                    if (!probe.hasPixels) {
+                    if (saved.empty) {
                         var removed = false;
-                        try {
-                            removed = saved.file.remove();
-                        } catch (removeError) {
-                            removed = false;
-                        }
-                        if (!removed) {
-                            cleanupErrors[cleanupErrors.length] =
-                                "无法删除全透明探测文件，该编号已被占用：" + saved.file.fsName;
+                        if (saved.file) {
+                            try {
+                                removed = saved.file.remove();
+                            } catch (removeError) {
+                                removed = false;
+                            }
+                            if (!removed) {
+                                cleanupErrors[cleanupErrors.length] =
+                                    "无法删除全透明探测文件，该编号已被占用：" + saved.file.fsName;
+                            }
                         }
                         skipped[skipped.length] = {
                             id: target.id,
@@ -1345,9 +1648,9 @@ var QPE = (function () {
         }
         var chosen = null;
         if (startFolder) {
-            chosen = Folder.selectDialog("请选择 PNG 输出文件夹", startFolder);
+            chosen = Folder.selectDialog("请选择输出文件夹", startFolder);
         } else {
-            chosen = Folder.selectDialog("请选择 PNG 输出文件夹");
+            chosen = Folder.selectDialog("请选择输出文件夹");
         }
         if (!chosen) {
             return {
@@ -1382,8 +1685,10 @@ var QPE = (function () {
     var METHODS = {
         status: status,
         preview: preview,
-        previewSelectedLayers: previewSelectedLayers,
+        exportImage: exportImage,
+        estimateSize: estimateSize,
         exportPng: exportPng,
+        previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
         pickFolder: pickFolder,
         openFolder: openFolder
@@ -1422,8 +1727,10 @@ var QPE = (function () {
     return {
         status: status,
         preview: preview,
-        previewSelectedLayers: previewSelectedLayers,
+        exportImage: exportImage,
+        estimateSize: estimateSize,
         exportPng: exportPng,
+        previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
         pickFolder: pickFolder,
         openFolder: openFolder,

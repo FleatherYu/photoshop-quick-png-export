@@ -130,6 +130,13 @@ test("manifest schema version suits CEP 9 (Photoshop CC 2019)", () => {
   assert.equal(root.attrs.Version, "7.0");
 });
 
+test("bundle and extension versions match package.json", () => {
+  const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  assert.equal(root.attrs.ExtensionBundleVersion, pkg.version);
+  const extensionList = find(root, "ExtensionList");
+  assert.equal(find(extensionList, "Extension").attrs.Version, pkg.version);
+});
+
 test("bundle ids are consistent", () => {
   const bundleId = root.attrs.ExtensionBundleId;
   assert.match(bundleId, /^[A-Za-z0-9._-]+$/);

@@ -76,7 +76,9 @@ function bootPanel() {
     "status", "next-file", "next-hint", "doc-info", "mock-note", "last-export",
     "last-path", "copy-path", "open-folder", "mode", "selection-box",
     "selection-summary", "selection-list", "refresh-selection", "batch-details",
-    "batch-details-body"
+    "batch-details-body", "format", "quality-row", "quality", "quality-value",
+    "folder-source", "estimate-row", "estimate-value", "settings", "numbering",
+    "folder-mode"
   ];
   const elements = new Map(ids.map((id) => [id, makeElement(id)]));
   const storage = new Map();
