@@ -41,6 +41,25 @@ var CEPBridge = (function () {
         { id: 3, name: "产品图", isGroup: false },
         { id: 5, name: "装饰组", isGroup: true }
     ];
+    // Fixed fake collage selection: four selected objects, three exportable and
+    // one clipping-mask dependent layer that the host skips (so the collage
+    // partial result path is visible in a browser preview without touching
+    // Photoshop). Three valid objects make the default grid 2 columns x 2 rows.
+    var MOCK_COLLAGE_SELECTION = [
+        { id: 2, name: "标题文字", isGroup: false },
+        { id: 3, name: "产品图", isGroup: false },
+        { id: 5, name: "装饰组", isGroup: true }
+    ];
+    var MOCK_COLLAGE_SKIPPED = [
+        {
+            id: 9,
+            name: "剪贴高光",
+            isGroup: false,
+            code: "CLIPPING_DEPENDENCY",
+            message: "依赖下方图层（剪贴蒙版），已跳过"
+        }
+    ];
+    var MOCK_COLLAGE_SELECTION_KEY = "mock-collage-selection";
 
     /* ---------- public API ---------- */
 
@@ -505,6 +524,262 @@ var CEPBridge = (function () {
         };
     }
 
+    // Mirrors the host's previewCollage payload: the effective object count,
+    // the grid the panel will show, and the document size every cell uses.
+    function mockPreviewCollage(args) {
+        if (!mockDocOpen) {
+            return {
+                ok: false,
+                code: "NO_DOCUMENT",
+                message: "请先打开一个 Photoshop 文档"
+            };
+        }
+        var prefix = String(args.prefix || "").replace(/^\s+|\s+$/g, "");
+        if (!prefix) {
+            return {
+                ok: false,
+                code: "EMPTY",
+                message: "请输入文件名前缀"
+            };
+        }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
+        var format = mockFormat(args);
+        var numbering = mockNumbering(args);
+        var digits = Number(args.digits) || 2;
+        var folderAvailable = false;
+        var start = 1;
+        var maxNumber = 0;
+        var existingCount = 0;
+        if (args.folder) {
+            if (args.folder !== MOCK_FOLDER) {
+                return {
+                    ok: false,
+                    code: "FOLDER_MISSING",
+                    message: "输出文件夹不存在或无法访问：" + args.folder
+                };
+            }
+            var scan = mockScan(prefix, digits, format, numbering);
+            start = scan.nextNumber;
+            maxNumber = scan.maxNumber;
+            existingCount = scan.existingCount;
+            folderAvailable = true;
+        }
+        var items = [];
+        for (var i = 0; i < MOCK_COLLAGE_SELECTION.length; i++) {
+            items[items.length] = {
+                id: MOCK_COLLAGE_SELECTION[i].id,
+                name: MOCK_COLLAGE_SELECTION[i].name,
+                isGroup: MOCK_COLLAGE_SELECTION[i].isGroup
+            };
+        }
+        return {
+            ok: true,
+            document: mockDoc.name,
+            documentWidth: mockDoc.width,
+            documentHeight: mockDoc.height,
+            selectionKey: MOCK_COLLAGE_SELECTION_KEY,
+            selectedCount: MOCK_COLLAGE_SELECTION.length + MOCK_COLLAGE_SKIPPED.length,
+            count: items.length,
+            items: items,
+            skipped: MOCK_COLLAGE_SKIPPED,
+            folderAvailable: folderAvailable,
+            fileName: prefix + "-" + mockPad(start, digits) + mockExtension(format),
+            startNumber: start,
+            maxNumber: maxNumber,
+            existingCount: existingCount,
+            format: format,
+            warnings: []
+        };
+    }
+
+    // Mirrors the host's collage geometry rules closely enough for the browser
+    // preview: effective columns are clamped to the object count, the target
+    // size keeps the original aspect ratio, and upsizing is rejected.
+    function mockCollageColumns(args, count) {
+        var auto = Math.ceil(Math.sqrt(count));
+        var raw = args.columns;
+        var columns;
+        if (raw === null || raw === undefined || String(raw).replace(/^\s+|\s+$/g, "") === "") {
+            columns = auto;
+        } else {
+            columns = Math.round(Number(raw));
+        }
+        if (!isFinite(columns) || columns < 1) {
+            columns = auto;
+        }
+        if (columns > count) {
+            columns = count;
+        }
+        return columns;
+    }
+
+    function mockCollageTarget(args, originalWidth, originalHeight) {
+        var widthText = (args.targetWidth === null || args.targetWidth === undefined)
+            ? ""
+            : String(args.targetWidth).replace(/^\s+|\s+$/g, "");
+        var heightText = (args.targetHeight === null || args.targetHeight === undefined)
+            ? ""
+            : String(args.targetHeight).replace(/^\s+|\s+$/g, "");
+        if (!widthText && !heightText) {
+            return {
+                ok: true,
+                width: originalWidth,
+                height: originalHeight
+            };
+        }
+        var width = null;
+        var height = null;
+        if (widthText) {
+            width = Math.round(Number(widthText));
+            if (!isFinite(width) || width < 1) {
+                return {
+                    ok: false,
+                    code: "TARGET_INVALID",
+                    message: "目标尺寸必须是大于 0 的整数（至少 1 px）。"
+                };
+            }
+            if (width > originalWidth) {
+                return {
+                    ok: false,
+                    code: "TARGET_UPSCALE",
+                    message: "目标尺寸不能大于原始拼图尺寸（" + originalWidth + " × " +
+                        originalHeight + " px），不支持放大。"
+                };
+            }
+            height = Math.max(1, Math.round(width * originalHeight / originalWidth));
+            return {
+                ok: true,
+                width: width,
+                height: height
+            };
+        }
+        height = Math.round(Number(heightText));
+        if (!isFinite(height) || height < 1) {
+            return {
+                ok: false,
+                code: "TARGET_INVALID",
+                message: "目标尺寸必须是大于 0 的整数（至少 1 px）。"
+            };
+        }
+        if (height > originalHeight) {
+            return {
+                ok: false,
+                code: "TARGET_UPSCALE",
+                message: "目标尺寸不能大于原始拼图尺寸（" + originalWidth + " × " +
+                    originalHeight + " px），不支持放大。"
+            };
+        }
+        width = Math.max(1, Math.round(height * originalWidth / originalHeight));
+        return {
+            ok: true,
+            width: width,
+            height: height
+        };
+    }
+
+    function mockExportCollage(args) {
+        if (!mockDocOpen) {
+            return {
+                ok: false,
+                code: "NO_DOCUMENT",
+                message: "请先打开一个 Photoshop 文档"
+            };
+        }
+        var prefix = String(args.prefix || "").replace(/^\s+|\s+$/g, "");
+        if (!prefix) {
+            return {
+                ok: false,
+                code: "EMPTY",
+                message: "请输入文件名前缀"
+            };
+        }
+        var qualityResult = mockQualityError(args);
+        if (qualityResult) {
+            return qualityResult;
+        }
+        if (!args.folder) {
+            return {
+                ok: false,
+                code: "NO_FOLDER",
+                message: "请选择输出文件夹"
+            };
+        }
+        if (args.folder !== MOCK_FOLDER) {
+            return {
+                ok: false,
+                code: "FOLDER_MISSING",
+                message: "输出文件夹不存在或无法访问：" + args.folder
+            };
+        }
+        if (args.selectionKey && args.selectionKey !== MOCK_COLLAGE_SELECTION_KEY) {
+            return {
+                ok: false,
+                code: "SELECTION_CHANGED",
+                message: "当前文档或选中的图层已发生变化，请刷新选择后重试"
+            };
+        }
+        var count = MOCK_COLLAGE_SELECTION.length;
+        var columns = mockCollageColumns(args, count);
+        var rows = Math.ceil(count / columns);
+        var originalWidth = columns * mockDoc.width;
+        var originalHeight = rows * mockDoc.height;
+        var target = mockCollageTarget(args, originalWidth, originalHeight);
+        if (!target.ok) {
+            return target;
+        }
+        var format = mockFormat(args);
+        var numbering = mockNumbering(args);
+        var digits = Number(args.digits) || 2;
+        var scan = mockScan(prefix, digits, format, numbering);
+        var fileName = prefix + "-" + mockPad(scan.nextNumber, digits) + mockExtension(format);
+        // The mock intentionally does not touch mockFileNames here: the file is
+        // never written, and pushing it would desync the other mock previews.
+        mockDoc.saved = true;
+        var placed = [];
+        for (var i = 0; i < MOCK_COLLAGE_SELECTION.length; i++) {
+            placed[placed.length] = {
+                id: MOCK_COLLAGE_SELECTION[i].id,
+                name: MOCK_COLLAGE_SELECTION[i].name,
+                isGroup: MOCK_COLLAGE_SELECTION[i].isGroup,
+                cellColumn: i % columns + 1,
+                cellRow: Math.floor(i / columns) + 1
+            };
+        }
+        return {
+            ok: true,
+            code: "OK",
+            message: "拼图导出完成：放入 " + count + " 个对象，跳过 " +
+                MOCK_COLLAGE_SKIPPED.length + " 项",
+            completed: true,
+            fileName: fileName,
+            fullPath: MOCK_FOLDER + "\\" + fileName,
+            number: scan.nextNumber,
+            maxNumber: scan.maxNumber,
+            existingCount: scan.existingCount,
+            format: format,
+            quality: format === "jpg" ? Number(args.quality) : null,
+            width: target.width,
+            height: target.height,
+            originalWidth: originalWidth,
+            originalHeight: originalHeight,
+            columns: columns,
+            rows: rows,
+            placedCount: count,
+            placed: placed,
+            targetWidth: target.width,
+            targetHeight: target.height,
+            total: MOCK_COLLAGE_SELECTION.length + MOCK_COLLAGE_SKIPPED.length,
+            selectedCount: MOCK_COLLAGE_SELECTION.length + MOCK_COLLAGE_SKIPPED.length,
+            skipped: MOCK_COLLAGE_SKIPPED,
+            converted: false,
+            warnings: [],
+            document: mockDoc.name
+        };
+    }
+
     function mockSuggestPrefix(name) {
         var base = String(name).replace(/\.[A-Za-z0-9]{1,5}$/, "");
         var cleaned = base.replace(/[\\/:*?"<>|]/g, "").replace(/^\s+|\s+$/g, "");
@@ -558,6 +833,12 @@ var CEPBridge = (function () {
         if (method === "exportSelectedLayers") {
             return mockExportSelected(args);
         }
+        if (method === "previewCollage") {
+            return mockPreviewCollage(args);
+        }
+        if (method === "exportCollage") {
+            return mockExportCollage(args);
+        }
         if (method === "pickFolder") {
             mockFiles(MOCK_FOLDER);
             return {
@@ -582,6 +863,7 @@ var CEPBridge = (function () {
         window.setTimeout(function () {
             var result = mockDispatch(method, args);
             if ((method === "exportPng" || method === "exportImage" ||
+                method === "exportCollage" ||
                 method === "exportSelectedLayers") && result.ok) {
                 mockDoc.saved = true;
             }

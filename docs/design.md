@@ -53,6 +53,8 @@ ExtendScript 的 `#include` 在不同 CEP 宿主/路径下解析不可靠，所�
 | `estimateSize` | `{format, quality}` | `bytes`、`format`、`quality`；把当前画面按真实导出的同一套保存参数写入系统临时文件后读 `File.length` 并立即删除，不碰输出目录 |
 | `previewSelectedLayers` | `{prefix, digits, folder, format, quality, numbering}` | 批量对象列表、`selectionKey`、`expectedFileName`、`skipped`、`warnings` |
 | `exportSelectedLayers` | 同上 + `selectionKey` | 成功 / 跳过 / 失败清单、`counts`、`cleanupErrors` |
+| `previewCollage` | `{prefix, digits, folder, format, quality, numbering}` | 与 `previewSelectedLayers` 相同的选择 / 跳过清单，另有 `documentWidth` / `documentHeight` 与单个预计 `fileName`（拼图是一张图） |
+| `exportCollage` | 同上 + `{columns, targetWidth, targetHeight, selectionKey}` | `fileName/fullPath`、最终 `width/height`、`columns/rows`、`placedCount`、`placed`（每项落在第几列第几行）、`skipped`、`converted`、`warnings`、`cleanupErrors` |
 | `pickFolder` | `{current}` | `path`；用户取消返回 `canceled: true`（不是错误） |
 | `openFolder` | `{path}` | 在资源管理器中打开目录 |
 
@@ -88,6 +90,10 @@ ExtendScript 的 `#include` 在不同 CEP 宿主/路径下解析不可靠，所�
 | `COLLISION` | 连续 100 次都撞名 | 提示重试，重试会重新扫描 |
 | `SAVE_FAILED` / `VERIFY_FAILED` | Photoshop 保存异常 / 结果文件缺失或 0 字节 | 报错，**不显示成功** |
 | `ESTIMATE_FAILED` | 估算时无法创建/写入/读取临时文件 | 预计大小显示「无法估算」，不阻塞导出 |
+| `TARGET_INVALID` | 拼图目标宽/高为 0、负数或非数字 | 提示用户修正，不发起导出 |
+| `TARGET_UPSCALE` | 拼图目标尺寸大于原始拼图尺寸 | 提示不支持放大（只缩小或保持原尺寸） |
+| `NOTHING_TO_EXPORT` | 拼图时 0 个有效对象，或可导出对象全部透明 | 说明原因，不写文件 |
+| `COLLAGE_TOO_LARGE` | 拼图像素超过 Photoshop 文档上限（单边 300000 px） | 提示减少列数 |
 | `EVAL_ERROR` / `BAD_RESPONSE` / `NO_RESPONSE` | evalScript 层失败 | 报错 |
 
 ## 安全设计（这些点都有对应测试或代码路径）
@@ -292,3 +298,85 @@ PNG 批量可以用「保存后重开 PNG 看 bounds」判空，但 JPG 没有 a
 Photoshop 检查 UI 与两种编号策略。`tests/panel-folder.test.mjs` 用可编排的假桥接验证
 目录跟随状态机；真机场景（质量差异、预估一致、透明填白、批量跳过、displayDialogs 恢复）
 由 `tests/photoshop/jpg-acceptance.jsx` 覆盖。
+
+## 拼图导出（1.3.0）
+
+### 交互
+
+`范围` 段增加第三项「拼图」，与整图 / 选中图层共用 `qpe.mode` 记忆。拼图模式读取当前
+选择的方式与「选中图层」完全一致（`collectSelection`：面板顺序、选中的父组优先、
+手动选中的隐藏层照样导出、依赖对象跳过并报原因），不做第二套实现。
+
+面板只让用户填列数：默认 `ceil(sqrt(N))`，改过的值记在 `qpe.collageColumns`；
+列数大于有效对象数时夹到 N 并提示。行数由 `ceil(N / 列数)` 推出，界面显示
+「N 张 → C 列 × R 行」。`N` 取自宿主预览的 `count`（扣除依赖跳过项），不是选中数量。
+
+格子固定为整块画布（文档宽 × 高），不裁剪、不留缝、不留外边距；按面板顺序行优先
+（左上 → 右上 → 下一行）填格。PNG 保留透明；JPG 与 1.2.0 一致，透明处和末尾空格子
+都是白色。
+
+### 网格与目标尺寸（QPECore）
+
+面板和宿主共用 `jsx/core.jsx` 里的纯函数，避免两边算法分叉：
+
+- `collageAutoColumns(count)` = `ceil(sqrt(count))`；
+- `collageRows(count, columns)` = `ceil(count / columns)`；
+- `normalizeCollageColumns(value, count)` → `{columns, clamped}`，非法 / ≤0 退回自动值，
+  大于 `count` 时夹到 `count` 并置 `clamped`；
+- `collageOriginalSize(columns, rows, docWidth, docHeight)` → 列数 × 画布宽、行数 × 画布高；
+- `resolveCollageTarget(origW, origH, widthInput, heightInput)` → `{ok, width, height,
+  source}`：宽优先，另一边按原比例四舍五入且至少 1 px；两个都空表示原始尺寸；
+  显式输入 0 / 负数 / 非数字 → `TARGET_INVALID`；显式输入大于原始 → `TARGET_UPSCALE`。
+
+面板实时显示「原始 W × H → 导出 W × H」。目标尺寸只存在内存里，切换选择或文档时清空
+（不写 localStorage），因为记住一个针对旧选择的尺寸很容易误导出。
+
+### 合成流程
+
+宿主 `exportCollage` 复用批量导出的选择 / 隔离 / 判空代码，只把「每项存一个文件」换成
+「每项贴进一张大图」：
+
+1. 校验参数与目录（同批量导出），`collectSelection` 读选择并算出有效对象与跳过项；
+2. 比对 `selectionKey`，选择变了就 `SELECTION_CHANGED`；
+3. 有效对象为 0 → `NOTHING_TO_EXPORT`；用 `normalizeCollageColumns` /
+   `collageRows` / `collageOriginalSize` 算网格，超过 300000 px → `COLLAGE_TOO_LARGE`；
+   `resolveCollageTarget` 校验目标尺寸；
+4. `doc.duplicate()` 得到工作副本并按需转 8 位 RGB（源文档不动）；
+   `app.documents.add(原始宽, 原始高, 分辨率, RGB, TRANSPARENT, 8 位)` 新建拼图画布；
+5. 逐个有效对象：恢复可见性快照 → 只显示该对象（组恢复组内可见性）→ 工作副本存成
+   `Folder.temp/qpe-collage-*` 临时 PNG → `app.open` 该 PNG，活动图层 `bounds` 面积为 0
+   即全透明，记 `EMPTY` 跳过且不占格子；否则把图层 `duplicate` 进拼图画布，
+   按 `(列, 行)` 算出格子原点，用 `translate` 让对象在格子内保持画布原位置；
+6. 全部贴完才缩放一次：目标与原始不同时 `resizeImage(..., BICUBICSHARPER)`，只缩小；
+7. JPG 走 `fillWhiteAndFlatten`（白底、末尾空格子也是白）；
+8. `nextFreeTarget` 取编号（与批量共用编号策略 / 目录规则），`saveAs` 后校验
+   `exists && length > 0`，失败删掉半成品并报 `VERIFY_FAILED`；
+9. `finally` 关闭拼图画布与工作副本、删除全部临时 PNG、恢复源文档为活动文档并恢复
+   `app.displayDialogs`；清理失败只记 `cleanupErrors`，不掩盖主结果。
+
+> 为什么用「隔离 → 临时 PNG → 重新打开 → 贴图层」而不是直接复制合并结果：临时 PNG 的
+> 活动图层 `bounds` 是 CC 2019 上唯一稳定可靠的「合成后是否有像素」判据（1.2.0 的批量
+> 判空已经验证过）；重新打开后拿到的是一层已 flatten 的像素层，贴进拼图不会把调整层 /
+> 组结构带过去，也不会改源文档。代价是每个对象多一次临时保存与打开，真机耗时在
+> `docs/acceptance.md` 记录。
+
+### 边界与失败
+
+- 目标尺寸在宿主再校验一次，不信任面板；面板提示只是即时反馈。
+- 0 有效对象、全部透明、超过文档上限、目标放大都在写文件前失败，输出目录不会留下
+  半成品；保存后才失败的情况会尝试删除 0 字节文件。
+- 拼图模式不显示大小预估：一张大图的预估需要额外合成一次，收益低。
+- 编号、目录跟随、JPG 质量、格式全部沿用 1.2.0 的规则，不新增存储键（除列数）。
+
+### 面板与 mock
+
+`js/panel.js` 在拼图模式下用宿主 `previewCollage` 的 `count` / `documentWidth` /
+`documentHeight` 驱动网格提示和目标尺寸联动；导出调用 `exportCollage`，结果区展示
+文件路径、最终像素尺寸、实际放入数量与跳过清单。`js/cep-bridge.js` 的 mock 同步提供
+`previewCollage` / `exportCollage`：mock 文档 1080×1920、选中 4 项（3 个有效 + 1 个剪贴
+依赖跳过），默认 2 列 × 2 行、原始 2160×3840，浏览器里可以完整走通交互。
+
+`tests/photoshop/collage-acceptance.jsx` + `scripts/verify-collage-photoshop.ps1` 覆盖
+真机场景：逐格像素验证顺序 / 位置、空格子透明或白色、目标尺寸与放大拒绝、跳过项不占格、
+源文档不变、临时文件清理、编号与目录规则。
+

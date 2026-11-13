@@ -26,6 +26,12 @@
  *   orderSelectedLayers(items, selectedIds)   -> panel-order records, selected ancestors win
  *   buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) -> {startNumber, names, ...}
  *   summarizeBatch(successes, skipped, failed, unprocessedCount) -> counts
+ *   collageAutoColumns(count)                 -> default column count (ceil(sqrt(count)))
+ *   collageRows(count, columns)               -> rows needed for the grid
+ *   normalizeCollageColumns(value, count)     -> {columns, clamped}
+ *   collageOriginalSize(columns, rows, docWidth, docHeight) -> {width, height}
+ *   resolveCollageTarget(origWidth, origHeight, widthInput, heightInput)
+ *                                             -> {ok, width, height, source} | {ok:false, code, message}
  *   escapeRegExp(text)                        -> string
  *   derivePrefixFromDocument(docName)         -> {prefix, changed, documentName}
  *   toJson(value)                             -> ASCII-only JSON string (safe for evalScript)
@@ -409,6 +415,154 @@ var QPECore = (function () {
         };
     }
 
+    /* ---------- collage grid (1.3.0) ---------- */
+
+    function toPositiveInteger(value) {
+        if (typeof value !== "number" || !isFinite(value)) {
+            return null;
+        }
+        var rounded = Math.round(value);
+        return rounded > 0 ? rounded : null;
+    }
+
+    function parseIntegerInput(value) {
+        if (value === null || typeof value === "undefined" || value === "") {
+            return null;
+        }
+        if (typeof value === "string") {
+            var text = trimText(value);
+            if (text === "") {
+                return null;
+            }
+            value = Number(text);
+        }
+        if (typeof value !== "number" || !isFinite(value)) {
+            return null;
+        }
+        return Math.round(value);
+    }
+
+    // Default grid is as square as possible. Zero / invalid count -> 0 columns.
+    function collageAutoColumns(count) {
+        var total = toPositiveInteger(count);
+        if (!total) {
+            return 0;
+        }
+        return Math.ceil(Math.sqrt(total));
+    }
+
+    // Row-major fill: rows = ceil(count / columns).
+    function collageRows(count, columns) {
+        var total = toPositiveInteger(count);
+        var cols = toPositiveInteger(columns);
+        if (!total || !cols) {
+            return 0;
+        }
+        return Math.ceil(total / cols);
+    }
+
+    // Only the user chooses the column count. A value above the number of valid
+    // objects is clamped to that count (empty trailing cells are useless); an
+    // empty / invalid value falls back to the auto grid.
+    function normalizeCollageColumns(value, count) {
+        var total = toPositiveInteger(count);
+        var maxColumns = total ? total : 1;
+        var requested = parseIntegerInput(value);
+        var columns;
+        var clamped = false;
+        if (requested === null || requested <= 0) {
+            columns = collageAutoColumns(total);
+            if (columns < 1) {
+                columns = 1;
+            }
+        } else if (requested > maxColumns) {
+            columns = maxColumns;
+            clamped = true;
+        } else {
+            columns = requested;
+        }
+        return { columns: columns, clamped: clamped };
+    }
+
+    // Every cell is the full document canvas; no gaps and no margins.
+    function collageOriginalSize(columns, rows, docWidth, docHeight) {
+        var cols = toPositiveInteger(columns);
+        var rowCount = toPositiveInteger(rows);
+        var width = toPositiveInteger(docWidth);
+        var height = toPositiveInteger(docHeight);
+        return {
+            width: (cols && width) ? cols * width : 0,
+            height: (rowCount && height) ? rowCount * height : 0
+        };
+    }
+
+    // Target size keeps the original aspect ratio. Only shrinking is allowed:
+    // an explicit target larger than the original grid is rejected so the
+    // panel can tell the user instead of silently upscaling.
+    function resolveCollageTarget(origWidth, origHeight, widthInput, heightInput) {
+        var originalWidth = toPositiveInteger(origWidth);
+        var originalHeight = toPositiveInteger(origHeight);
+        if (!originalWidth || !originalHeight) {
+            return {
+                ok: false,
+                code: "TARGET_INVALID",
+                message: "原始拼图尺寸无效，无法计算目标尺寸。"
+            };
+        }
+        var width = parseIntegerInput(widthInput);
+        var height = parseIntegerInput(heightInput);
+        if (width !== null && width < 1) {
+            width = null;
+        }
+        if (height !== null && height < 1) {
+            height = null;
+        }
+        var invalid = {
+            ok: false,
+            code: "TARGET_INVALID",
+            message: "目标尺寸必须是大于 0 的整数（至少 1 px）。"
+        };
+        if (typeof widthInput !== "undefined" && widthInput !== null && widthInput !== "" && width === null) {
+            return invalid;
+        }
+        if (typeof heightInput !== "undefined" && heightInput !== null && heightInput !== "" && height === null) {
+            return invalid;
+        }
+        var upscale = {
+            ok: false,
+            code: "TARGET_UPSCALE",
+            message: "目标尺寸不能大于原始拼图尺寸（" + originalWidth + " × " + originalHeight + " px），不支持放大。"
+        };
+        if (width !== null) {
+            if (width > originalWidth) {
+                return upscale;
+            }
+            return {
+                ok: true,
+                width: width,
+                height: Math.max(1, Math.round(width * originalHeight / originalWidth)),
+                source: "width"
+            };
+        }
+        if (height !== null) {
+            if (height > originalHeight) {
+                return upscale;
+            }
+            return {
+                ok: true,
+                width: Math.max(1, Math.round(height * originalWidth / originalHeight)),
+                height: height,
+                source: "height"
+            };
+        }
+        return {
+            ok: true,
+            width: originalWidth,
+            height: originalHeight,
+            source: "original"
+        };
+    }
+
     /* ---------- JSON (ASCII only) ---------- */
 
     function hex4(code) {
@@ -552,6 +706,11 @@ var QPECore = (function () {
         orderSelectedLayers: orderSelectedLayers,
         buildBatchNames: buildBatchNames,
         summarizeBatch: summarizeBatch,
+        collageAutoColumns: collageAutoColumns,
+        collageRows: collageRows,
+        normalizeCollageColumns: normalizeCollageColumns,
+        collageOriginalSize: collageOriginalSize,
+        resolveCollageTarget: resolveCollageTarget,
         escapeRegExp: escapeRegExp,
         toJson: toJson
     };

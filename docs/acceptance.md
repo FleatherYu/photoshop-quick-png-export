@@ -5,7 +5,97 @@
 
 本文只记录**实际跑过的验证**；没有跑过的项目在文末「未验证」里明确列出。
 
-## 1.2.0 验收（2026-11-11，最新）
+## 1.3.0 验收（2026-11-13，最新）
+
+环境：Windows，Adobe Photoshop CC 2019 20.0.10（CEP 9），Node.js v24.15.0。
+
+### 自动化测试
+
+```powershell
+node scripts/build-host.mjs --check
+node --test --test-isolation=none "tests/*.test.mjs"
+```
+
+- `build-host --check` 输出 `jsx/host.jsx is up to date.`，退出码 0；
+- **107 项测试全部通过**（0 失败；1.2.0 时为 82 项）。新增覆盖：
+  `jsx/core.jsx` 的拼图数学 16 项（自动列数、行数、列数夹取、原始尺寸计算、
+  目标宽高联动与四舍五入、最小 1px、放大拒绝、空输入等于原始尺寸）、
+  面板拼图模式（自动列数取自宿主预览的有效对象数、列数夹到有效数并提示、
+  宽高联动、清空两个目标框回到原始尺寸、导出参数包含
+  `columns` / `targetWidth` / `targetHeight` / `selectionKey`）、
+  mock 与宿主返回形状一致、清单版本与 `package.json` 一致。
+
+### 真实 Photoshop 验收
+
+拼图验收脚本 [`scripts/verify-collage-photoshop.ps1`](../scripts/verify-collage-photoshop.ps1) +
+[`tests/photoshop/collage-acceptance.jsx`](../tests/photoshop/collage-acceptance.jsx)，
+在 Photoshop 没有打开其它文档时运行，结果 **PASS（37 个步骤全部 ok，19 个文件）**：
+
+| 覆盖项 | 结果 |
+| --- | --- |
+| 400×400 文档、6 个图层、全选；3 列 → 1200×800（2 行），6 个对象按面板顺序放入 | PASS |
+| 每格像素验证：格子内容是面板中对应图层、位置保持原画布位置（非裁剪/居中） | PASS |
+| 填充顺序：第 1 行 1,2,3 格，第 2 行 1,2,3 格（行优先） | PASS |
+| 同一选择 4 列 → 1600×800，6 个对象 + 末尾 2 格空 | PASS |
+| 末尾空格：PNG 完全透明（alpha = 0），JPG 为白色 | PASS |
+| 目标宽 300 → 300×200（保持 1200:800 比例） | PASS |
+| 目标大于原始尺寸 → `TARGET_UPSCALE`，不写文件 | PASS |
+| 空图层 / 剪贴依赖对象被跳过、不占格子，结果列出原因（5 个选中 → 预览 3 个有效、2 个 CLIPPED；导出时空图层再被跳过：放入 2、跳过 3） | PASS |
+| 全部对象被跳过 → `NOTHING_TO_EXPORT`，不写文件 | PASS |
+| 选择变化后旧 `selectionKey` 导出 → `SELECTION_CHANGED`，不写文件 | PASS |
+| JPG：透明处填白、红色内容保留、文件为 JPEG（SOI `FF D8 FF`） | PASS |
+| JPG 质量 12 明显大于质量 2（>1.5 倍；测试图样加了细噪声，实测约 2.97 倍） | PASS |
+| 质量越界 → `BAD_QUALITY`，不写文件 | PASS |
+| 16 位 / CMYK：临时副本转换 + `converted:true` 与警告，结果尺寸/内容正确 | PASS |
+| 源文档未被修改（图层数、可见性、选择、颜色模式、位深、未保存状态） | PASS |
+| 编号共用（已有 PNG → 04）与按格式分开（→ 01）、混合大小写 `.JPG`/`.jpeg`、不覆盖已有文件 | PASS |
+| 未选文件夹 / 文件夹不存在 → `NO_FOLDER` / `FOLDER_MISSING`，不写文件 | PASS |
+| 导出后无临时文档、无 `Folder.temp\qpe-collage-*` / `qpe-estimate-*` 残留、无探测文件残留 | PASS |
+| `app.displayDialogs` 恢复原值（`ERROR` → `ERROR`） | PASS |
+
+#### 本次验收发现并修复的问题
+
+1. **JPG 质量断言不稳定**：首轮 `quality 12 > quality 2` 失败（q2 = 18200、
+   q12 = 21024 字节，仅 1.16 倍）。原因是测试图样是平坦色块，各质量档压缩后大小接近。
+   在验收图样上加 `applyAddNoise(30, GAUSSIAN)` 后 q2 = 74352、q12 = 220755 字节（2.97 倍），
+   断言通过。宿主实现未改动，只是让测试素材对质量设置敏感。
+2. **`displayDialogs` 报告顺序**：首轮 `harness restored displayDialogs` 失败，报告读到
+   `DialogModes.NO` 而原值为 `ERROR`——脚本先记录 `run-cleanup` 再恢复对话框。
+   已调整为**先恢复、后记录**，报告现在能证明运行结束时光标/对话框状态已还原。
+
+### 界面视觉检查
+
+浏览器 mock 截图（playwright-core + 本机 Chrome，320×760 视口，2x）保存在
+`.tmp/visual-check/`：`11-dark-collage-default.png`（默认 2 列 × 2 行、原始尺寸、跳过项）、
+`12-dark-collage-target.png`（填 540 → 高度自动 960）、
+`13-dark-collage-upscale.png`（放大被拒绝的红色提示）、
+`14-light-collage-jpg.png`、`15-light-collage-exported.png`（浅色主题、JPG 质量 10、
+导出成功状态与详情），以及 1.2.0 的 6 张文档/选中模式截图。
+深色 / 浅色主题均无横向溢出（scrollWidth = clientWidth），布局无错位。
+README 的拼图模式截图由同一 mock 重新生成为
+[`docs/images/panel-collage-mode.png`](images/panel-collage-mode.png)（300×672 CSS 像素 @2x）。
+
+### 1.2.0 回归
+
+同机重跑 1.2.0 的三个真机脚本，全部通过、行为未回退：
+
+- `scripts/verify-photoshop.ps1` → `ALL CHECKS PASSED`（PNG 800×600 RGBA、16 位转换、错误码）；
+- `scripts/verify-batch-photoshop.ps1` → `ALL BATCH CHECKS PASSED`（15 个步骤，隐藏子图层、
+  显式选中的隐藏图层、重复导出、16 位转换内容）；
+- `scripts/verify-jpg-photoshop.ps1` → `ALL JPG CHECKS PASSED`（25 个步骤，`displayDialogs`
+  恢复、无预估临时文件、JPEG SOI、透明填白、红色内容保留）。
+
+### 未验证 / 需人工确认
+
+- 拼图模式在 **Photoshop 面板内**的实际渲染（字体、DPI 缩放、面板默认高度 520 是否
+  足够）没有真机截屏，只有浏览器 mock 截图；视觉以 `.tmp/visual-check/` 交由人工审阅。
+- **超大规模格子**（几十上百层、超大画布）的时间与内存未压测；本次只验证了 6 个对象、
+  1200×800 / 1600×800 的拼图。
+- 画布边长超过 300000 px 的 `COLLAGE_TOO_LARGE` 分支未构造真实超大文档验证
+  （只验证了正常尺寸下不会写残留文件）。
+- 缩小导出的观感质量（`BICUBICSHARPER` 单次缩放）未做人工视觉判断。
+
+## 1.2.0 验收（2026-11-11）
 
 环境：Windows，Adobe Photoshop CC 2019 20.0.10（CEP 9），Node.js v24.15.0。
 

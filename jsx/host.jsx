@@ -32,6 +32,12 @@
  *   orderSelectedLayers(items, selectedIds)   -> panel-order records, selected ancestors win
  *   buildBatchNames(fileNames, prefix, digits, count, caseInsensitive) -> {startNumber, names, ...}
  *   summarizeBatch(successes, skipped, failed, unprocessedCount) -> counts
+ *   collageAutoColumns(count)                 -> default column count (ceil(sqrt(count)))
+ *   collageRows(count, columns)               -> rows needed for the grid
+ *   normalizeCollageColumns(value, count)     -> {columns, clamped}
+ *   collageOriginalSize(columns, rows, docWidth, docHeight) -> {width, height}
+ *   resolveCollageTarget(origWidth, origHeight, widthInput, heightInput)
+ *                                             -> {ok, width, height, source} | {ok:false, code, message}
  *   escapeRegExp(text)                        -> string
  *   derivePrefixFromDocument(docName)         -> {prefix, changed, documentName}
  *   toJson(value)                             -> ASCII-only JSON string (safe for evalScript)
@@ -415,6 +421,154 @@ var QPECore = (function () {
         };
     }
 
+    /* ---------- collage grid (1.3.0) ---------- */
+
+    function toPositiveInteger(value) {
+        if (typeof value !== "number" || !isFinite(value)) {
+            return null;
+        }
+        var rounded = Math.round(value);
+        return rounded > 0 ? rounded : null;
+    }
+
+    function parseIntegerInput(value) {
+        if (value === null || typeof value === "undefined" || value === "") {
+            return null;
+        }
+        if (typeof value === "string") {
+            var text = trimText(value);
+            if (text === "") {
+                return null;
+            }
+            value = Number(text);
+        }
+        if (typeof value !== "number" || !isFinite(value)) {
+            return null;
+        }
+        return Math.round(value);
+    }
+
+    // Default grid is as square as possible. Zero / invalid count -> 0 columns.
+    function collageAutoColumns(count) {
+        var total = toPositiveInteger(count);
+        if (!total) {
+            return 0;
+        }
+        return Math.ceil(Math.sqrt(total));
+    }
+
+    // Row-major fill: rows = ceil(count / columns).
+    function collageRows(count, columns) {
+        var total = toPositiveInteger(count);
+        var cols = toPositiveInteger(columns);
+        if (!total || !cols) {
+            return 0;
+        }
+        return Math.ceil(total / cols);
+    }
+
+    // Only the user chooses the column count. A value above the number of valid
+    // objects is clamped to that count (empty trailing cells are useless); an
+    // empty / invalid value falls back to the auto grid.
+    function normalizeCollageColumns(value, count) {
+        var total = toPositiveInteger(count);
+        var maxColumns = total ? total : 1;
+        var requested = parseIntegerInput(value);
+        var columns;
+        var clamped = false;
+        if (requested === null || requested <= 0) {
+            columns = collageAutoColumns(total);
+            if (columns < 1) {
+                columns = 1;
+            }
+        } else if (requested > maxColumns) {
+            columns = maxColumns;
+            clamped = true;
+        } else {
+            columns = requested;
+        }
+        return { columns: columns, clamped: clamped };
+    }
+
+    // Every cell is the full document canvas; no gaps and no margins.
+    function collageOriginalSize(columns, rows, docWidth, docHeight) {
+        var cols = toPositiveInteger(columns);
+        var rowCount = toPositiveInteger(rows);
+        var width = toPositiveInteger(docWidth);
+        var height = toPositiveInteger(docHeight);
+        return {
+            width: (cols && width) ? cols * width : 0,
+            height: (rowCount && height) ? rowCount * height : 0
+        };
+    }
+
+    // Target size keeps the original aspect ratio. Only shrinking is allowed:
+    // an explicit target larger than the original grid is rejected so the
+    // panel can tell the user instead of silently upscaling.
+    function resolveCollageTarget(origWidth, origHeight, widthInput, heightInput) {
+        var originalWidth = toPositiveInteger(origWidth);
+        var originalHeight = toPositiveInteger(origHeight);
+        if (!originalWidth || !originalHeight) {
+            return {
+                ok: false,
+                code: "TARGET_INVALID",
+                message: "\u539f\u59cb\u62fc\u56fe\u5c3a\u5bf8\u65e0\u6548\uff0c\u65e0\u6cd5\u8ba1\u7b97\u76ee\u6807\u5c3a\u5bf8\u3002"
+            };
+        }
+        var width = parseIntegerInput(widthInput);
+        var height = parseIntegerInput(heightInput);
+        if (width !== null && width < 1) {
+            width = null;
+        }
+        if (height !== null && height < 1) {
+            height = null;
+        }
+        var invalid = {
+            ok: false,
+            code: "TARGET_INVALID",
+            message: "\u76ee\u6807\u5c3a\u5bf8\u5fc5\u987b\u662f\u5927\u4e8e 0 \u7684\u6574\u6570\uff08\u81f3\u5c11 1 px\uff09\u3002"
+        };
+        if (typeof widthInput !== "undefined" && widthInput !== null && widthInput !== "" && width === null) {
+            return invalid;
+        }
+        if (typeof heightInput !== "undefined" && heightInput !== null && heightInput !== "" && height === null) {
+            return invalid;
+        }
+        var upscale = {
+            ok: false,
+            code: "TARGET_UPSCALE",
+            message: "\u76ee\u6807\u5c3a\u5bf8\u4e0d\u80fd\u5927\u4e8e\u539f\u59cb\u62fc\u56fe\u5c3a\u5bf8\uff08" + originalWidth + " \u00d7 " + originalHeight + " px\uff09\uff0c\u4e0d\u652f\u6301\u653e\u5927\u3002"
+        };
+        if (width !== null) {
+            if (width > originalWidth) {
+                return upscale;
+            }
+            return {
+                ok: true,
+                width: width,
+                height: Math.max(1, Math.round(width * originalHeight / originalWidth)),
+                source: "width"
+            };
+        }
+        if (height !== null) {
+            if (height > originalHeight) {
+                return upscale;
+            }
+            return {
+                ok: true,
+                width: Math.max(1, Math.round(height * originalWidth / originalHeight)),
+                height: height,
+                source: "height"
+            };
+        }
+        return {
+            ok: true,
+            width: originalWidth,
+            height: originalHeight,
+            source: "original"
+        };
+    }
+
     /* ---------- JSON (ASCII only) ---------- */
 
     function hex4(code) {
@@ -558,6 +712,11 @@ var QPECore = (function () {
         orderSelectedLayers: orderSelectedLayers,
         buildBatchNames: buildBatchNames,
         summarizeBatch: summarizeBatch,
+        collageAutoColumns: collageAutoColumns,
+        collageRows: collageRows,
+        normalizeCollageColumns: normalizeCollageColumns,
+        collageOriginalSize: collageOriginalSize,
+        resolveCollageTarget: resolveCollageTarget,
         escapeRegExp: escapeRegExp,
         toJson: toJson
     };
@@ -580,7 +739,7 @@ if (typeof module !== "undefined" && module.exports) {
  *   QPE_call(method, argsJson) -> JSON string
  * Methods: status / preview / exportImage / estimateSize / exportPng (legacy
  *          PNG-only alias) / previewSelectedLayers / exportSelectedLayers /
- *          pickFolder / openFolder
+ *          previewCollage / exportCollage / pickFolder / openFolder
  */
 
 var QPE = (function () {
@@ -939,7 +1098,7 @@ var QPE = (function () {
                 copy.bitsPerChannel = BitsPerChannelType.EIGHT;
             }
             if (copy.mode !== DocumentMode.RGB) {
-                copy.mode = DocumentMode.RGB;
+                copy.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
             }
             if (format === "jpg") {
                 fillWhiteAndFlatten(copy);
@@ -1197,6 +1356,11 @@ var QPE = (function () {
     /* ---------- batch: selected layers ---------- */
 
     var BATCH_TEMP_NAME = "QPE-batch-temp";
+
+    // Collage (1.3.0): Photoshop refuses documents wider or taller than this.
+    var COLLAGE_TEMP_NAME = "QPE-collage-temp";
+    var COLLAGE_WORK_TEMP_NAME = "QPE-collage-work-temp";
+    var MAX_DOCUMENT_DIMENSION = 300000;
 
     // ExtendScript has no Array.prototype.indexOf; keep a tiny helper local to
     // the batch code instead of touching the shipped core contract.
@@ -1860,6 +2024,527 @@ var QPE = (function () {
         return warnings;
     }
 
+    /* ---------- shared selection pipeline ---------- */
+
+    // Reads Photoshop's real multi-selection once and turns it into the two
+    // lists every selection-based command needs: objects that can be exported
+    // on their own, and objects that depend on neighbouring layers (adjustment,
+    // clipping, blend) and are skipped with a reason. The collage commands use
+    // exactly the same pipeline as the selected-layer commands, so both modes
+    // agree on order, dedupe and skip rules.
+    function collectSelection(doc) {
+        var selection = readTargetLayerIds();
+        if (!selection.ok) {
+            return selection;
+        }
+        var index = buildLayerIndex(doc);
+        var resolved = resolveTargets(index, selection.ids);
+        if (!resolved.ok) {
+            return resolved;
+        }
+        var exportable = [];
+        var knownSkips = [];
+        for (var i = 0; i < resolved.targets.length; i++) {
+            var target = resolved.targets[i];
+            var dependency = dependencyFor(target, index);
+            if (dependency) {
+                knownSkips[knownSkips.length] = {
+                    id: target.id,
+                    name: target.name,
+                    isGroup: target.isGroup,
+                    code: dependency.code,
+                    message: dependency.message
+                };
+            } else {
+                exportable[exportable.length] = target;
+            }
+        }
+        return {
+            ok: true,
+            index: index,
+            selection: selection,
+            resolved: resolved,
+            exportable: exportable,
+            knownSkips: knownSkips,
+            selectionKey: selectionKeyOf(doc, selection.ids)
+        };
+    }
+
+    function documentSize(doc) {
+        var size = {
+            width: 0,
+            height: 0
+        };
+        try {
+            size.width = Math.round(doc.width.as("px"));
+            size.height = Math.round(doc.height.as("px"));
+        } catch (sizeError) {
+            size.width = 0;
+            size.height = 0;
+        }
+        return size;
+    }
+
+    function copySkipList(list) {
+        var copy = [];
+        for (var i = 0; i < list.length; i++) {
+            copy[copy.length] = list[i];
+        }
+        return copy;
+    }
+
+    /* ---------- collage: selected layers on a grid (1.3.0) ---------- */
+
+    // The panel only knows the object count; the grid maths lives in QPECore so
+    // the panel and the host compute exactly the same columns / rows / target
+    // size. Preview returns one expected file name (a collage is one image).
+    function previewCollage(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a Photoshop \u6587\u6863");
+        }
+        var doc = app.activeDocument;
+
+        var prefixCheck = QPECore.validatePrefix(args.prefix);
+        if (!prefixCheck.ok) {
+            return fail(prefixCheck.code, prefixCheck.message, prefixCheck.chars ? {
+                chars: prefixCheck.chars
+            } : null);
+        }
+        if (!QPECore.isValidDigits(args.digits)) {
+            return fail("BAD_DIGITS", "\u5e8f\u53f7\u4f4d\u6570\u53ea\u80fd\u662f 1\u30012 \u6216 3 \u4f4d");
+        }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
+
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
+        }
+
+        var files = [];
+        var folderAvailable = false;
+        if (args.folder) {
+            var folder = folderFromPath(args.folder);
+            if (!folder) {
+                return fail("FOLDER_MISSING", "\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u8bbf\u95ee\uff1a" + args.folder);
+            }
+            files = listFileNames(folder);
+            folderAvailable = true;
+        }
+        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, 1, true, options);
+        var fileName = plan.names.length > 0 ? plan.names[0] :
+            QPECore.buildFileName(prefixCheck.prefix, args.digits, plan.startNumber, options.format);
+        var items = [];
+        for (var i = 0; i < collected.exportable.length; i++) {
+            items[items.length] = {
+                id: collected.exportable[i].id,
+                name: collected.exportable[i].name,
+                isGroup: collected.exportable[i].isGroup
+            };
+        }
+
+        var warnings = [];
+        if (needsConversion(doc)) {
+            warnings[warnings.length] =
+                "\u539f\u6587\u6863\u4e3a " + modeName(doc.mode) + " / " + bitDepthName(doc.bitsPerChannel) +
+                " \u4f4d\uff0c\u5bfc\u51fa\u65f6\u4f1a\u5728\u4e34\u65f6\u526f\u672c\u4e2d\u8f6c\u6362\u4e3a RGB / 8 \u4f4d\uff08\u9884\u8ba1\u6587\u4ef6\u540d\u57fa\u4e8e\u5f53\u524d\u72b6\u6001\uff09";
+        }
+        var size = documentSize(doc);
+
+        return {
+            ok: true,
+            document: doc.name,
+            documentWidth: size.width,
+            documentHeight: size.height,
+            selectionKey: collected.selectionKey,
+            selectedCount: collected.resolved.targets.length,
+            count: collected.exportable.length,
+            items: items,
+            skipped: collected.knownSkips,
+            folderAvailable: folderAvailable,
+            fileName: fileName,
+            startNumber: plan.startNumber,
+            maxNumber: plan.maxNumber,
+            existingCount: plan.existingCount,
+            warnings: warnings
+        };
+    }
+
+    // One collage image. Every cell is the whole canvas, filled row-major in
+    // panel order with no gaps and no margins.
+    //
+    // Composition: isolate one object at a time on a temporary copy (same
+    // isolation rules as the batch export), save that copy as a temporary
+    // transparent PNG, re-open it, duplicate its flattened layer into the
+    // collage document and translate it so the object keeps its original
+    // position inside its cell. PNG keeps transparency; JPG gets the same white
+    // fill as 1.2.0 (also for trailing empty cells). The target size is applied
+    // once, to the finished collage.
+    function exportCollage(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a Photoshop \u6587\u6863");
+        }
+        var doc = app.activeDocument;
+
+        var prefixCheck = QPECore.validatePrefix(args.prefix);
+        if (!prefixCheck.ok) {
+            return fail(prefixCheck.code, prefixCheck.message, prefixCheck.chars ? {
+                chars: prefixCheck.chars
+            } : null);
+        }
+        if (!QPECore.isValidDigits(args.digits)) {
+            return fail("BAD_DIGITS", "\u5e8f\u53f7\u4f4d\u6570\u53ea\u80fd\u662f 1\u30012 \u6216 3 \u4f4d");
+        }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
+        if (!args.folder) {
+            return fail("NO_FOLDER", "\u8bf7\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939");
+        }
+        var folder = folderFromPath(args.folder);
+        if (!folder) {
+            return fail("FOLDER_MISSING", "\u8f93\u51fa\u6587\u4ef6\u5939\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u8bbf\u95ee\uff1a" + args.folder);
+        }
+        var writable = folderWritable(folder);
+        if (!writable.ok) {
+            return fail("FOLDER_NOT_WRITABLE", writable.message);
+        }
+
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
+        }
+        if (args.selectionKey && args.selectionKey !== collected.selectionKey) {
+            return fail("SELECTION_CHANGED", "\u5f53\u524d\u6587\u6863\u6216\u9009\u4e2d\u7684\u56fe\u5c42\u5df2\u53d1\u751f\u53d8\u5316\uff0c\u8bf7\u5237\u65b0\u9009\u62e9\u540e\u91cd\u8bd5");
+        }
+
+        var exportable = collected.exportable;
+        var skipped = copySkipList(collected.knownSkips);
+        var totalTargets = collected.resolved.targets.length;
+        if (exportable.length === 0) {
+            return fail("NOTHING_TO_EXPORT",
+                "\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u5bf9\u8c61\uff1a\u5168\u90e8 " + skipped.length + " \u9879\u4f9d\u8d56\u5176\u5b83\u56fe\u5c42\u88ab\u8df3\u8fc7\uff0c\u672a\u5bfc\u51fa\u3002", {
+                    skipped: skipped,
+                    total: totalTargets
+                });
+        }
+
+        var columnInfo = QPECore.normalizeCollageColumns(args.columns, exportable.length);
+        var columns = columnInfo.columns;
+        var rows = QPECore.collageRows(exportable.length, columns);
+        var docSize = documentSize(doc);
+        var original = QPECore.collageOriginalSize(columns, rows, docSize.width, docSize.height);
+        if (!(original.width > 0 && original.height > 0)) {
+            return fail("COLLAGE_FAILED", "\u65e0\u6cd5\u8bfb\u53d6\u5f53\u524d\u6587\u6863\u7684\u50cf\u7d20\u5c3a\u5bf8\uff0c\u672a\u5bfc\u51fa\u3002");
+        }
+        if (original.width > MAX_DOCUMENT_DIMENSION || original.height > MAX_DOCUMENT_DIMENSION) {
+            return fail("COLLAGE_TOO_LARGE",
+                "\u62fc\u56fe\u5c3a\u5bf8 " + original.width + " \u00d7 " + original.height +
+                " px \u8d85\u8fc7 Photoshop \u7684\u6587\u6863\u4e0a\u9650\uff08\u5355\u8fb9\u6700\u591a " + MAX_DOCUMENT_DIMENSION +
+                " px\uff09\uff0c\u8bf7\u51cf\u5c11\u5217\u6570\u3002", {
+                    columns: columns,
+                    rows: rows,
+                    originalWidth: original.width,
+                    originalHeight: original.height
+                });
+        }
+        var target = QPECore.resolveCollageTarget(original.width, original.height,
+            args.targetWidth, args.targetHeight);
+        if (!target.ok) {
+            return fail(target.code, target.message, {
+                originalWidth: original.width,
+                originalHeight: original.height
+            });
+        }
+
+        var oldDialogs = app.displayDialogs;
+        var workDoc = null;
+        var collageDoc = null;
+        var tempFiles = [];
+        var placed = 0;
+        var placedItems = [];
+        var warnings = [];
+        var converted = false;
+        var cleanupErrors = [];
+        var failure = null;
+        var savedFile = null;
+        var phase = "prepare";
+
+        try {
+            app.displayDialogs = DialogModes.NO;
+
+            if (needsConversion(doc)) {
+                warnings = batchConversionWarnings(doc);
+                converted = true;
+            }
+
+            // Same one-copy-for-the-whole-run strategy as the batch export.
+            workDoc = doc.duplicate(COLLAGE_WORK_TEMP_NAME);
+            if (workDoc.bitsPerChannel !== BitsPerChannelType.EIGHT) {
+                workDoc.bitsPerChannel = BitsPerChannelType.EIGHT;
+            }
+            if (workDoc.mode !== DocumentMode.RGB) {
+                workDoc.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
+            }
+            var workIndex = buildLayerIndex(workDoc);
+            var snapshot = captureVisibility(workIndex);
+            var visibleById = {};
+            for (var v = 0; v < snapshot.length; v++) {
+                visibleById[snapshot[v].record.id] = snapshot[v].visible;
+            }
+
+            phase = "canvas";
+            collageDoc = app.documents.add(UnitValue(original.width, "px"),
+                UnitValue(original.height, "px"), doc.resolution, COLLAGE_TEMP_NAME,
+                NewDocumentMode.RGB, DocumentFill.TRANSPARENT, 1, BitsPerChannelType.EIGHT);
+
+            for (var t = 0; t < exportable.length; t++) {
+                var source = exportable[t];
+                var workTarget = workIndex.byId[source.id];
+                if (!workTarget) {
+                    failure = {
+                        code: "BATCH_MAPPING_FAILED",
+                        message: "\u300c" + source.name + "\u300d\u5728\u4e34\u65f6\u526f\u672c\u4e2d\u627e\u4e0d\u5230\uff0c\u65e0\u6cd5\u62fc\u56fe"
+                    };
+                    break;
+                }
+                phase = "isolate";
+                // documents.add() and the previous placement leave the collage
+                // canvas active; on CC 2019 visibility edits and saveAs follow
+                // the active document, so switch back to the work copy first.
+                app.activeDocument = workDoc;
+                restoreVisibility(snapshot, visibleById);
+                isolateRecord(workTarget, workIndex, visibleById);
+
+                phase = "compose";
+                var tempPng = uniqueTempFile(".png");
+                if (!tempPng) {
+                    failure = {
+                        code: "TEMP_FAILED",
+                        message: "\u65e0\u6cd5\u521b\u5efa\u4e34\u65f6\u6587\u4ef6\u7528\u4e8e\u62fc\u56fe"
+                    };
+                    break;
+                }
+                tempFiles[tempFiles.length] = tempPng;
+                var probeDoc = null;
+                try {
+                    workDoc.saveAs(tempPng, saveOptionsFor("png", args.quality), true,
+                        Extension.LOWERCASE);
+                    probeDoc = app.open(tempPng);
+                    var probeLayer = probeDoc.activeLayer;
+                    var sourceBounds = probeLayer.bounds;
+                    var sourceWidth = sourceBounds[2].as("px") - sourceBounds[0].as("px");
+                    var sourceHeight = sourceBounds[3].as("px") - sourceBounds[1].as("px");
+                    if (!(sourceWidth > 0 && sourceHeight > 0)) {
+                        skipped[skipped.length] = {
+                            id: source.id,
+                            name: source.name,
+                            isGroup: source.isGroup,
+                            code: "EMPTY",
+                            message: "\u5b8c\u5168\u900f\u660e\uff0c\u5df2\u8df3\u8fc7\uff08\u4e0d\u5360\u683c\u5b50\uff09"
+                        };
+                        continue;
+                    }
+
+                    var cellX = (placed % columns) * docSize.width;
+                    var cellY = Math.floor(placed / columns) * docSize.height;
+                    // Layer.duplicate() only works from the frontmost document;
+                    // translate() then needs the collage canvas in front.
+                    app.activeDocument = probeDoc;
+                    var placedLayer = probeLayer.duplicate(collageDoc, ElementPlacement.PLACEATBEGINNING);
+                    app.activeDocument = collageDoc;
+                    collageDoc.activeLayer = placedLayer;
+                    var placedBounds = placedLayer.bounds;
+                    var deltaX = cellX + sourceBounds[0].as("px") - placedBounds[0].as("px");
+                    var deltaY = cellY + sourceBounds[1].as("px") - placedBounds[1].as("px");
+                    if (deltaX !== 0 || deltaY !== 0) {
+                        placedLayer.translate(UnitValue(deltaX, "px"), UnitValue(deltaY, "px"));
+                    }
+                    placedItems[placedItems.length] = {
+                        id: source.id,
+                        name: source.name,
+                        isGroup: source.isGroup,
+                        cellColumn: (placed % columns) + 1,
+                        cellRow: Math.floor(placed / columns) + 1
+                    };
+                    placed++;
+                } finally {
+                    if (probeDoc) {
+                        try {
+                            probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+                        } catch (closeProbeError) {
+                            cleanupErrors[cleanupErrors.length] =
+                                "\u5173\u95ed\u62fc\u56fe\u63a2\u6d4b\u6587\u6863\u5931\u8d25\uff1a" + errorText(closeProbeError);
+                        }
+                    }
+                    try {
+                        if (tempPng.exists) {
+                            tempPng.remove();
+                        }
+                    } catch (removeTempError) {
+                        cleanupErrors[cleanupErrors.length] =
+                            "\u65e0\u6cd5\u5220\u9664\u62fc\u56fe\u4e34\u65f6\u6587\u4ef6\uff1a" + tempPng.fsName;
+                    }
+                }
+            }
+
+            if (!failure && placed === 0) {
+                failure = {
+                    code: "NOTHING_TO_EXPORT",
+                    message: "\u6240\u6709\u53ef\u5bfc\u51fa\u5bf9\u8c61\u90fd\u662f\u5b8c\u5168\u900f\u660e\u7684\uff0c\u672a\u5bfc\u51fa\u3002"
+                };
+            }
+
+            if (!failure) {
+                phase = "resize";
+                if (target.width !== original.width || target.height !== original.height) {
+                    // Downscale only, once, on the finished collage.
+                    collageDoc.resizeImage(UnitValue(target.width, "px"),
+                        UnitValue(target.height, "px"), doc.resolution,
+                        ResampleMethod.BICUBICSHARPER);
+                }
+
+                phase = "save";
+                if (format === "jpg") {
+                    fillWhiteAndFlatten(collageDoc);
+                }
+                var output = nextFreeTarget(folder, prefixCheck.prefix, args.digits, true, options);
+                if (!output.ok) {
+                    failure = {
+                        code: output.code,
+                        message: output.message
+                    };
+                } else {
+                    collageDoc.saveAs(new File(output.fullPath),
+                        saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
+                    var file = new File(output.fullPath);
+                    if (!file.exists) {
+                        failure = {
+                            code: "VERIFY_FAILED",
+                            message: "\u5bfc\u51fa\u540e\u627e\u4e0d\u5230\u8f93\u51fa\u6587\u4ef6\uff1a" + output.fullPath
+                        };
+                    } else if (file.length <= 0) {
+                        try {
+                            file.remove();
+                        } catch (removeBrokenError) {
+                            // best effort: the failure below is the real result
+                        }
+                        failure = {
+                            code: "VERIFY_FAILED",
+                            message: "\u5bfc\u51fa\u7684\u6587\u4ef6\u4e3a\u7a7a\uff080 \u5b57\u8282\uff09\uff1a" + output.fullPath
+                        };
+                    } else {
+                        savedFile = {
+                            number: output.number,
+                            fileName: output.fileName,
+                            fullPath: output.fullPath
+                        };
+                    }
+                }
+            }
+        } catch (collageError) {
+            if (!failure) {
+                failure = {
+                    code: "COLLAGE_FAILED",
+                    message: "\u62fc\u56fe\u5bfc\u51fa\u5931\u8d25\uff1a" + errorText(collageError)
+                };
+            }
+        } finally {
+            if (collageDoc) {
+                try {
+                    collageDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeCanvasError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "\u5173\u95ed\u62fc\u56fe\u4e34\u65f6\u6587\u6863\u5931\u8d25\uff1a" + errorText(closeCanvasError);
+                }
+                collageDoc = null;
+            }
+            if (workDoc) {
+                try {
+                    workDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeWorkError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "\u5173\u95ed\u62fc\u56fe\u5de5\u4f5c\u526f\u672c\u5931\u8d25\uff1a" + errorText(closeWorkError);
+                }
+                workDoc = null;
+            }
+            for (var f = tempFiles.length - 1; f >= 0; f--) {
+                try {
+                    if (tempFiles[f].exists) {
+                        tempFiles[f].remove();
+                    }
+                } catch (removeLeftoverError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "\u9057\u7559\u62fc\u56fe\u4e34\u65f6\u6587\u4ef6\uff1a" + tempFiles[f].fsName;
+                }
+            }
+            try {
+                app.activeDocument = doc;
+            } catch (activateError) {
+                cleanupErrors[cleanupErrors.length] =
+                    "\u6062\u590d\u6e90\u6587\u6863\u4e3a\u6d3b\u52a8\u6587\u6863\u5931\u8d25\uff1a" + errorText(activateError);
+            }
+            try {
+                app.displayDialogs = oldDialogs;
+            } catch (dialogRestoreError) {
+                // ignore
+            }
+        }
+
+        if (failure) {
+            return fail(failure.code || "COLLAGE_FAILED", failure.message, {
+                columns: columns,
+                rows: rows,
+                originalWidth: original.width,
+                originalHeight: original.height,
+                targetWidth: target.width,
+                targetHeight: target.height,
+                total: totalTargets,
+                placedCount: placed,
+                placed: placedItems,
+                skipped: skipped,
+                converted: converted,
+                warnings: warnings,
+                cleanupErrors: cleanupErrors,
+                document: doc.name
+            });
+        }
+
+        var message = "\u62fc\u56fe\u5bfc\u51fa\u5b8c\u6210";
+        if (skipped.length > 0) {
+            message += "\uff1a\u5df2\u653e\u5165 " + placed + " \u5f20\uff0c\u8df3\u8fc7 " + skipped.length + " \u9879";
+        }
+        return {
+            ok: true,
+            code: "OK",
+            message: message,
+            fileName: savedFile.fileName,
+            fullPath: savedFile.fullPath,
+            number: savedFile.number,
+            width: target.width,
+            height: target.height,
+            columns: columns,
+            rows: rows,
+            placedCount: placed,
+            placed: placedItems,
+            skipped: skipped,
+            total: totalTargets,
+            converted: converted,
+            warnings: warnings,
+            cleanupErrors: cleanupErrors,
+            document: doc.name,
+            originalWidth: original.width,
+            originalHeight: original.height
+        };
+    }
+
     function previewSelectedLayers(args) {
         if (app.documents.length === 0) {
             return fail("NO_DOCUMENT", "\u8bf7\u5148\u6253\u5f00\u4e00\u4e2a Photoshop \u6587\u6863");
@@ -1882,33 +2567,13 @@ var QPE = (function () {
         }
         var options = scanOptions(args);
 
-        var selection = readTargetLayerIds();
-        if (!selection.ok) {
-            return selection;
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
         }
-        var index = buildLayerIndex(doc);
-        var resolved = resolveTargets(index, selection.ids);
-        if (!resolved.ok) {
-            return resolved;
-        }
-
-        var exportable = [];
-        var knownSkips = [];
-        for (var i = 0; i < resolved.targets.length; i++) {
-            var target = resolved.targets[i];
-            var dependency = dependencyFor(target, index);
-            if (dependency) {
-                knownSkips[knownSkips.length] = {
-                    id: target.id,
-                    name: target.name,
-                    isGroup: target.isGroup,
-                    code: dependency.code,
-                    message: dependency.message
-                };
-            } else {
-                exportable[exportable.length] = target;
-            }
-        }
+        var exportable = collected.exportable;
+        var knownSkips = collected.knownSkips;
+        var i;
 
         var files = [];
         var folderAvailable = false;
@@ -1941,8 +2606,8 @@ var QPE = (function () {
         return {
             ok: true,
             document: doc.name,
-            selectionKey: selectionKeyOf(doc, selection.ids),
-            selectedCount: resolved.targets.length,
+            selectionKey: collected.selectionKey,
+            selectedCount: collected.resolved.targets.length,
             count: exportable.length,
             items: items,
             skipped: knownSkips,
@@ -1987,18 +2652,14 @@ var QPE = (function () {
             return fail("FOLDER_NOT_WRITABLE", writable.message);
         }
 
-        var selection = readTargetLayerIds();
-        if (!selection.ok) {
-            return selection;
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
         }
-        var sourceIndex = buildLayerIndex(doc);
-        var resolved = resolveTargets(sourceIndex, selection.ids);
-        if (!resolved.ok) {
-            return resolved;
-        }
-        var targets = resolved.targets;
+        var sourceIndex = collected.index;
+        var targets = collected.resolved.targets;
 
-        if (args.selectionKey && args.selectionKey !== selectionKeyOf(doc, selection.ids)) {
+        if (args.selectionKey && args.selectionKey !== collected.selectionKey) {
             return fail("SELECTION_CHANGED", "\u5f53\u524d\u6587\u6863\u6216\u9009\u4e2d\u7684\u56fe\u5c42\u5df2\u53d1\u751f\u53d8\u5316\uff0c\u8bf7\u5237\u65b0\u9009\u62e9\u540e\u91cd\u8bd5");
         }
 
@@ -2030,7 +2691,7 @@ var QPE = (function () {
                 workDoc.bitsPerChannel = BitsPerChannelType.EIGHT;
             }
             if (workDoc.mode !== DocumentMode.RGB) {
-                workDoc.mode = DocumentMode.RGB;
+                workDoc.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
             }
 
             var workIndex = buildLayerIndex(workDoc);
@@ -2260,6 +2921,8 @@ var QPE = (function () {
         exportPng: exportPng,
         previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
+        previewCollage: previewCollage,
+        exportCollage: exportCollage,
         pickFolder: pickFolder,
         openFolder: openFolder
     };
@@ -2302,6 +2965,8 @@ var QPE = (function () {
         exportPng: exportPng,
         previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
+        previewCollage: previewCollage,
+        exportCollage: exportCollage,
         pickFolder: pickFolder,
         openFolder: openFolder,
         call: call

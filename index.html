@@ -16,6 +16,7 @@
     <div class="seg" id="mode" role="group" aria-label="导出范围">
       <button type="button" data-mode="document" aria-pressed="true">整图</button>
       <button type="button" data-mode="selection" aria-pressed="false">选中图层</button>
+      <button type="button" data-mode="collage" aria-pressed="false">拼图</button>
     </div>
   </div>
 
@@ -27,6 +28,31 @@
     <div class="selection-list" id="selection-list"></div>
     <p class="hint selection-note">每个选中对象导出一张；透明或依赖外部的对象会跳过，跳过项不占编号。</p>
     <button type="button" id="refresh-selection" class="btn-ghost">刷新选择</button>
+  </div>
+
+  <div id="collage-box" class="selection hidden">
+    <div class="row">
+      <label class="label" for="collage-columns">列数</label>
+      <input id="collage-columns" class="collage-columns" type="number" min="1" step="1"
+             inputmode="numeric" autocomplete="off">
+      <span class="collage-grid" id="collage-grid">—</span>
+    </div>
+    <div class="preview">
+      <span class="preview-label">原始尺寸</span>
+      <span class="preview-value" id="collage-original">—</span>
+    </div>
+    <div class="row">
+      <span class="label">目标尺寸</span>
+      <input id="collage-width" class="collage-size" type="number" min="1" step="1"
+             inputmode="numeric" autocomplete="off" placeholder="原始">
+      <span class="collage-times">×</span>
+      <input id="collage-height" class="collage-size" type="number" min="1" step="1"
+             inputmode="numeric" autocomplete="off" placeholder="原始">
+      <span class="collage-unit">px</span>
+    </div>
+    <p class="hint" id="collage-size-hint">—</p>
+    <div class="selection-list" id="collage-list"></div>
+    <p class="hint selection-note">每个对象占一格（整张画布大小），按面板从上到下、行优先排列；目标尺寸只缩不放，留空为原始尺寸。</p>
   </div>
 
   <div class="row">
@@ -119,6 +145,7 @@
 
   <div class="doc-info" id="doc-info">正在读取文档…</div>
 
+  <script src="jsx/core.jsx"></script>
   <script src="js/cep-bridge.js"></script>
   <script src="js/panel.js"></script>
 </body>

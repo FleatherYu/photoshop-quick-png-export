@@ -1,8 +1,8 @@
 {
   "name": "photoshop-quick-png-export",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "private": true,
-  "description": "CEP 9 panel for Photoshop CC 2019 that exports the active document, or the selected layers/groups, as sequentially numbered PNG or JPG files with a size estimate.",
+  "description": "CEP 9 panel for Photoshop CC 2019 that exports the active document, the selected layers/groups, or the selection combined into a collage grid, as sequentially numbered PNG or JPG files with a size estimate.",
   "scripts": {
     "build": "node scripts/build-host.mjs",
     "check": "node scripts/build-host.mjs --check",

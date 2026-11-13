@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+﻿import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createContext, runInContext } from "node:vm";
@@ -491,5 +491,126 @@ test("summarizeBatch treats a failed item as stopping the batch", () => {
   assert.equal(counts.failed, 1);
   assert.equal(counts.total, 2);
   assert.equal(counts.allSkipped, false);
+});
+
+/* ---------- collage grid (1.3.0) ---------- */
+
+test("collageAutoColumns picks the most square grid", () => {
+  assert.equal(core.collageAutoColumns(1), 1);
+  assert.equal(core.collageAutoColumns(2), 2);
+  assert.equal(core.collageAutoColumns(4), 2);
+  assert.equal(core.collageAutoColumns(5), 3);
+  assert.equal(core.collageAutoColumns(6), 3);
+  assert.equal(core.collageAutoColumns(9), 3);
+  assert.equal(core.collageAutoColumns(10), 4);
+});
+
+test("collageAutoColumns returns 0 for empty or invalid counts", () => {
+  for (const count of [0, -4, null, undefined, "6", NaN]) {
+    assert.equal(core.collageAutoColumns(count), 0, String(count));
+  }
+});
+
+test("collageRows fills row-major: ceil(count / columns)", () => {
+  assert.equal(core.collageRows(6, 3), 2);
+  assert.equal(core.collageRows(7, 3), 3);
+  assert.equal(core.collageRows(1, 1), 1);
+  assert.equal(core.collageRows(10, 4), 3);
+  assert.equal(core.collageRows(6, 0), 0);
+  assert.equal(core.collageRows(0, 2), 0);
+});
+
+test("normalizeCollageColumns falls back to the auto grid", () => {
+  for (const value of [null, undefined, "", "  ", 0, -3, "abc"]) {
+    const result = core.normalizeCollageColumns(value, 6);
+    assert.equal(result.columns, 3, String(value));
+    assert.equal(result.clamped, false, String(value));
+  }
+});
+
+test("normalizeCollageColumns keeps a valid user column count", () => {
+  assert.deepEqual({ ...core.normalizeCollageColumns(2, 6) }, { columns: 2, clamped: false });
+  assert.deepEqual({ ...core.normalizeCollageColumns("4", 6) }, { columns: 4, clamped: false });
+});
+
+test("normalizeCollageColumns clamps columns above the object count", () => {
+  assert.deepEqual({ ...core.normalizeCollageColumns(8, 6) }, { columns: 6, clamped: true });
+  assert.deepEqual({ ...core.normalizeCollageColumns(99, 2) }, { columns: 2, clamped: true });
+});
+
+test("normalizeCollageColumns never returns zero columns", () => {
+  assert.equal(core.normalizeCollageColumns(1, 0).columns, 1);
+});
+
+test("collageOriginalSize multiplies the canvas by columns and rows", () => {
+  assert.deepEqual({ ...core.collageOriginalSize(3, 2, 400, 400) }, { width: 1200, height: 800 });
+  assert.deepEqual({ ...core.collageOriginalSize(1, 1, 1080, 1920) }, { width: 1080, height: 1920 });
+  assert.deepEqual({ ...core.collageOriginalSize(0, 0, 400, 400) }, { width: 0, height: 0 });
+});
+
+test("resolveCollageTarget with empty inputs keeps the original size", () => {
+  for (const [width, height] of [[null, null], ["", ""], [undefined, undefined]]) {
+    assert.deepEqual({ ...core.resolveCollageTarget(1200, 800, width, height) }, {
+      ok: true,
+      width: 1200,
+      height: 800,
+      source: "original"
+    });
+  }
+});
+
+test("resolveCollageTarget derives the height from a target width", () => {
+  assert.deepEqual({ ...core.resolveCollageTarget(1200, 800, 300, null) }, {
+    ok: true,
+    width: 300,
+    height: 200,
+    source: "width"
+  });
+  assert.deepEqual({ ...core.resolveCollageTarget(1200, 800, "600", "") }, {
+    ok: true,
+    width: 600,
+    height: 400,
+    source: "width"
+  });
+});
+
+test("resolveCollageTarget derives the width from a target height", () => {
+  assert.deepEqual({ ...core.resolveCollageTarget(1200, 800, "", 400) }, {
+    ok: true,
+    width: 600,
+    height: 400,
+    source: "height"
+  });
+});
+
+test("resolveCollageTarget rounds the derived side and keeps at least 1 px", () => {
+  const result = core.resolveCollageTarget(1200, 800, 1001, null);
+  assert.equal(result.ok, true);
+  assert.equal(result.height, Math.max(1, Math.round(1001 * 800 / 1200)));
+  const thin = core.resolveCollageTarget(1200, 800, 1, null);
+  assert.deepEqual({ ...thin }, { ok: true, width: 1, height: 1, source: "width" });
+});
+
+test("resolveCollageTarget rejects targets larger than the original grid", () => {
+  const wider = core.resolveCollageTarget(1200, 800, 1201, null);
+  assert.equal(wider.ok, false);
+  assert.equal(wider.code, "TARGET_UPSCALE");
+  const taller = core.resolveCollageTarget(400, 400, "", 401);
+  assert.equal(taller.ok, false);
+  assert.equal(taller.code, "TARGET_UPSCALE");
+});
+
+test("resolveCollageTarget rejects zero, negative and non-numeric targets", () => {
+  for (const value of [0, -10, "abc"]) {
+    const result = core.resolveCollageTarget(1200, 800, value, null);
+    assert.equal(result.ok, false, String(value));
+    assert.equal(result.code, "TARGET_INVALID", String(value));
+  }
+});
+
+test("resolveCollageTarget rejects an invalid original size", () => {
+  const result = core.resolveCollageTarget(0, 800, null, null);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "TARGET_INVALID");
 });
 

@@ -72,7 +72,8 @@ body.theme-light {
   font-size: 11px;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="number"] {
   flex: 1 1 auto;
   min-width: 0;
   height: 24px;
@@ -88,12 +89,43 @@ input[type="text"] {
   user-select: text;
 }
 
-input[type="text"]:focus {
+input[type="text"]:focus,
+input[type="number"]:focus {
   border-color: var(--accent);
 }
 
-input[type="text"]::placeholder {
+input[type="text"]::placeholder,
+input[type="number"]::placeholder {
   color: var(--muted);
+}
+
+/* ---------- collage ---------- */
+
+/* input[type="number"] above is more specific than a bare class. */
+input.collage-columns {
+  flex: 0 0 56px;
+  width: 56px;
+}
+
+.collage-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.collage-size {
+  flex: 1 1 0;
+}
+
+.collage-times,
+.collage-unit {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 /* ---------- digit selector ---------- */
@@ -270,6 +302,10 @@ input[type="text"]::placeholder {
 
 .hint.warn {
   color: var(--warn);
+}
+
+.hint.error {
+  color: var(--error);
 }
 
 .hint.placeholder {

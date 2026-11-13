@@ -10,7 +10,7 @@
  *   QPE_call(method, argsJson) -> JSON string
  * Methods: status / preview / exportImage / estimateSize / exportPng (legacy
  *          PNG-only alias) / previewSelectedLayers / exportSelectedLayers /
- *          pickFolder / openFolder
+ *          previewCollage / exportCollage / pickFolder / openFolder
  */
 
 var QPE = (function () {
@@ -369,7 +369,7 @@ var QPE = (function () {
                 copy.bitsPerChannel = BitsPerChannelType.EIGHT;
             }
             if (copy.mode !== DocumentMode.RGB) {
-                copy.mode = DocumentMode.RGB;
+                copy.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
             }
             if (format === "jpg") {
                 fillWhiteAndFlatten(copy);
@@ -627,6 +627,11 @@ var QPE = (function () {
     /* ---------- batch: selected layers ---------- */
 
     var BATCH_TEMP_NAME = "QPE-batch-temp";
+
+    // Collage (1.3.0): Photoshop refuses documents wider or taller than this.
+    var COLLAGE_TEMP_NAME = "QPE-collage-temp";
+    var COLLAGE_WORK_TEMP_NAME = "QPE-collage-work-temp";
+    var MAX_DOCUMENT_DIMENSION = 300000;
 
     // ExtendScript has no Array.prototype.indexOf; keep a tiny helper local to
     // the batch code instead of touching the shipped core contract.
@@ -1290,6 +1295,527 @@ var QPE = (function () {
         return warnings;
     }
 
+    /* ---------- shared selection pipeline ---------- */
+
+    // Reads Photoshop's real multi-selection once and turns it into the two
+    // lists every selection-based command needs: objects that can be exported
+    // on their own, and objects that depend on neighbouring layers (adjustment,
+    // clipping, blend) and are skipped with a reason. The collage commands use
+    // exactly the same pipeline as the selected-layer commands, so both modes
+    // agree on order, dedupe and skip rules.
+    function collectSelection(doc) {
+        var selection = readTargetLayerIds();
+        if (!selection.ok) {
+            return selection;
+        }
+        var index = buildLayerIndex(doc);
+        var resolved = resolveTargets(index, selection.ids);
+        if (!resolved.ok) {
+            return resolved;
+        }
+        var exportable = [];
+        var knownSkips = [];
+        for (var i = 0; i < resolved.targets.length; i++) {
+            var target = resolved.targets[i];
+            var dependency = dependencyFor(target, index);
+            if (dependency) {
+                knownSkips[knownSkips.length] = {
+                    id: target.id,
+                    name: target.name,
+                    isGroup: target.isGroup,
+                    code: dependency.code,
+                    message: dependency.message
+                };
+            } else {
+                exportable[exportable.length] = target;
+            }
+        }
+        return {
+            ok: true,
+            index: index,
+            selection: selection,
+            resolved: resolved,
+            exportable: exportable,
+            knownSkips: knownSkips,
+            selectionKey: selectionKeyOf(doc, selection.ids)
+        };
+    }
+
+    function documentSize(doc) {
+        var size = {
+            width: 0,
+            height: 0
+        };
+        try {
+            size.width = Math.round(doc.width.as("px"));
+            size.height = Math.round(doc.height.as("px"));
+        } catch (sizeError) {
+            size.width = 0;
+            size.height = 0;
+        }
+        return size;
+    }
+
+    function copySkipList(list) {
+        var copy = [];
+        for (var i = 0; i < list.length; i++) {
+            copy[copy.length] = list[i];
+        }
+        return copy;
+    }
+
+    /* ---------- collage: selected layers on a grid (1.3.0) ---------- */
+
+    // The panel only knows the object count; the grid maths lives in QPECore so
+    // the panel and the host compute exactly the same columns / rows / target
+    // size. Preview returns one expected file name (a collage is one image).
+    function previewCollage(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "请先打开一个 Photoshop 文档");
+        }
+        var doc = app.activeDocument;
+
+        var prefixCheck = QPECore.validatePrefix(args.prefix);
+        if (!prefixCheck.ok) {
+            return fail(prefixCheck.code, prefixCheck.message, prefixCheck.chars ? {
+                chars: prefixCheck.chars
+            } : null);
+        }
+        if (!QPECore.isValidDigits(args.digits)) {
+            return fail("BAD_DIGITS", "序号位数只能是 1、2 或 3 位");
+        }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
+
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
+        }
+
+        var files = [];
+        var folderAvailable = false;
+        if (args.folder) {
+            var folder = folderFromPath(args.folder);
+            if (!folder) {
+                return fail("FOLDER_MISSING", "输出文件夹不存在或无法访问：" + args.folder);
+            }
+            files = listFileNames(folder);
+            folderAvailable = true;
+        }
+        var plan = QPECore.buildBatchNames(files, prefixCheck.prefix, args.digits, 1, true, options);
+        var fileName = plan.names.length > 0 ? plan.names[0] :
+            QPECore.buildFileName(prefixCheck.prefix, args.digits, plan.startNumber, options.format);
+        var items = [];
+        for (var i = 0; i < collected.exportable.length; i++) {
+            items[items.length] = {
+                id: collected.exportable[i].id,
+                name: collected.exportable[i].name,
+                isGroup: collected.exportable[i].isGroup
+            };
+        }
+
+        var warnings = [];
+        if (needsConversion(doc)) {
+            warnings[warnings.length] =
+                "原文档为 " + modeName(doc.mode) + " / " + bitDepthName(doc.bitsPerChannel) +
+                " 位，导出时会在临时副本中转换为 RGB / 8 位（预计文件名基于当前状态）";
+        }
+        var size = documentSize(doc);
+
+        return {
+            ok: true,
+            document: doc.name,
+            documentWidth: size.width,
+            documentHeight: size.height,
+            selectionKey: collected.selectionKey,
+            selectedCount: collected.resolved.targets.length,
+            count: collected.exportable.length,
+            items: items,
+            skipped: collected.knownSkips,
+            folderAvailable: folderAvailable,
+            fileName: fileName,
+            startNumber: plan.startNumber,
+            maxNumber: plan.maxNumber,
+            existingCount: plan.existingCount,
+            warnings: warnings
+        };
+    }
+
+    // One collage image. Every cell is the whole canvas, filled row-major in
+    // panel order with no gaps and no margins.
+    //
+    // Composition: isolate one object at a time on a temporary copy (same
+    // isolation rules as the batch export), save that copy as a temporary
+    // transparent PNG, re-open it, duplicate its flattened layer into the
+    // collage document and translate it so the object keeps its original
+    // position inside its cell. PNG keeps transparency; JPG gets the same white
+    // fill as 1.2.0 (also for trailing empty cells). The target size is applied
+    // once, to the finished collage.
+    function exportCollage(args) {
+        if (app.documents.length === 0) {
+            return fail("NO_DOCUMENT", "请先打开一个 Photoshop 文档");
+        }
+        var doc = app.activeDocument;
+
+        var prefixCheck = QPECore.validatePrefix(args.prefix);
+        if (!prefixCheck.ok) {
+            return fail(prefixCheck.code, prefixCheck.message, prefixCheck.chars ? {
+                chars: prefixCheck.chars
+            } : null);
+        }
+        if (!QPECore.isValidDigits(args.digits)) {
+            return fail("BAD_DIGITS", "序号位数只能是 1、2 或 3 位");
+        }
+        var format = exportFormat(args);
+        var badQuality = qualityError(format, args.quality);
+        if (badQuality) {
+            return badQuality;
+        }
+        var options = scanOptions(args);
+        if (!args.folder) {
+            return fail("NO_FOLDER", "请选择输出文件夹");
+        }
+        var folder = folderFromPath(args.folder);
+        if (!folder) {
+            return fail("FOLDER_MISSING", "输出文件夹不存在或无法访问：" + args.folder);
+        }
+        var writable = folderWritable(folder);
+        if (!writable.ok) {
+            return fail("FOLDER_NOT_WRITABLE", writable.message);
+        }
+
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
+        }
+        if (args.selectionKey && args.selectionKey !== collected.selectionKey) {
+            return fail("SELECTION_CHANGED", "当前文档或选中的图层已发生变化，请刷新选择后重试");
+        }
+
+        var exportable = collected.exportable;
+        var skipped = copySkipList(collected.knownSkips);
+        var totalTargets = collected.resolved.targets.length;
+        if (exportable.length === 0) {
+            return fail("NOTHING_TO_EXPORT",
+                "没有可导出的对象：全部 " + skipped.length + " 项依赖其它图层被跳过，未导出。", {
+                    skipped: skipped,
+                    total: totalTargets
+                });
+        }
+
+        var columnInfo = QPECore.normalizeCollageColumns(args.columns, exportable.length);
+        var columns = columnInfo.columns;
+        var rows = QPECore.collageRows(exportable.length, columns);
+        var docSize = documentSize(doc);
+        var original = QPECore.collageOriginalSize(columns, rows, docSize.width, docSize.height);
+        if (!(original.width > 0 && original.height > 0)) {
+            return fail("COLLAGE_FAILED", "无法读取当前文档的像素尺寸，未导出。");
+        }
+        if (original.width > MAX_DOCUMENT_DIMENSION || original.height > MAX_DOCUMENT_DIMENSION) {
+            return fail("COLLAGE_TOO_LARGE",
+                "拼图尺寸 " + original.width + " × " + original.height +
+                " px 超过 Photoshop 的文档上限（单边最多 " + MAX_DOCUMENT_DIMENSION +
+                " px），请减少列数。", {
+                    columns: columns,
+                    rows: rows,
+                    originalWidth: original.width,
+                    originalHeight: original.height
+                });
+        }
+        var target = QPECore.resolveCollageTarget(original.width, original.height,
+            args.targetWidth, args.targetHeight);
+        if (!target.ok) {
+            return fail(target.code, target.message, {
+                originalWidth: original.width,
+                originalHeight: original.height
+            });
+        }
+
+        var oldDialogs = app.displayDialogs;
+        var workDoc = null;
+        var collageDoc = null;
+        var tempFiles = [];
+        var placed = 0;
+        var placedItems = [];
+        var warnings = [];
+        var converted = false;
+        var cleanupErrors = [];
+        var failure = null;
+        var savedFile = null;
+        var phase = "prepare";
+
+        try {
+            app.displayDialogs = DialogModes.NO;
+
+            if (needsConversion(doc)) {
+                warnings = batchConversionWarnings(doc);
+                converted = true;
+            }
+
+            // Same one-copy-for-the-whole-run strategy as the batch export.
+            workDoc = doc.duplicate(COLLAGE_WORK_TEMP_NAME);
+            if (workDoc.bitsPerChannel !== BitsPerChannelType.EIGHT) {
+                workDoc.bitsPerChannel = BitsPerChannelType.EIGHT;
+            }
+            if (workDoc.mode !== DocumentMode.RGB) {
+                workDoc.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
+            }
+            var workIndex = buildLayerIndex(workDoc);
+            var snapshot = captureVisibility(workIndex);
+            var visibleById = {};
+            for (var v = 0; v < snapshot.length; v++) {
+                visibleById[snapshot[v].record.id] = snapshot[v].visible;
+            }
+
+            phase = "canvas";
+            collageDoc = app.documents.add(UnitValue(original.width, "px"),
+                UnitValue(original.height, "px"), doc.resolution, COLLAGE_TEMP_NAME,
+                NewDocumentMode.RGB, DocumentFill.TRANSPARENT, 1, BitsPerChannelType.EIGHT);
+
+            for (var t = 0; t < exportable.length; t++) {
+                var source = exportable[t];
+                var workTarget = workIndex.byId[source.id];
+                if (!workTarget) {
+                    failure = {
+                        code: "BATCH_MAPPING_FAILED",
+                        message: "「" + source.name + "」在临时副本中找不到，无法拼图"
+                    };
+                    break;
+                }
+                phase = "isolate";
+                // documents.add() and the previous placement leave the collage
+                // canvas active; on CC 2019 visibility edits and saveAs follow
+                // the active document, so switch back to the work copy first.
+                app.activeDocument = workDoc;
+                restoreVisibility(snapshot, visibleById);
+                isolateRecord(workTarget, workIndex, visibleById);
+
+                phase = "compose";
+                var tempPng = uniqueTempFile(".png");
+                if (!tempPng) {
+                    failure = {
+                        code: "TEMP_FAILED",
+                        message: "无法创建临时文件用于拼图"
+                    };
+                    break;
+                }
+                tempFiles[tempFiles.length] = tempPng;
+                var probeDoc = null;
+                try {
+                    workDoc.saveAs(tempPng, saveOptionsFor("png", args.quality), true,
+                        Extension.LOWERCASE);
+                    probeDoc = app.open(tempPng);
+                    var probeLayer = probeDoc.activeLayer;
+                    var sourceBounds = probeLayer.bounds;
+                    var sourceWidth = sourceBounds[2].as("px") - sourceBounds[0].as("px");
+                    var sourceHeight = sourceBounds[3].as("px") - sourceBounds[1].as("px");
+                    if (!(sourceWidth > 0 && sourceHeight > 0)) {
+                        skipped[skipped.length] = {
+                            id: source.id,
+                            name: source.name,
+                            isGroup: source.isGroup,
+                            code: "EMPTY",
+                            message: "完全透明，已跳过（不占格子）"
+                        };
+                        continue;
+                    }
+
+                    var cellX = (placed % columns) * docSize.width;
+                    var cellY = Math.floor(placed / columns) * docSize.height;
+                    // Layer.duplicate() only works from the frontmost document;
+                    // translate() then needs the collage canvas in front.
+                    app.activeDocument = probeDoc;
+                    var placedLayer = probeLayer.duplicate(collageDoc, ElementPlacement.PLACEATBEGINNING);
+                    app.activeDocument = collageDoc;
+                    collageDoc.activeLayer = placedLayer;
+                    var placedBounds = placedLayer.bounds;
+                    var deltaX = cellX + sourceBounds[0].as("px") - placedBounds[0].as("px");
+                    var deltaY = cellY + sourceBounds[1].as("px") - placedBounds[1].as("px");
+                    if (deltaX !== 0 || deltaY !== 0) {
+                        placedLayer.translate(UnitValue(deltaX, "px"), UnitValue(deltaY, "px"));
+                    }
+                    placedItems[placedItems.length] = {
+                        id: source.id,
+                        name: source.name,
+                        isGroup: source.isGroup,
+                        cellColumn: (placed % columns) + 1,
+                        cellRow: Math.floor(placed / columns) + 1
+                    };
+                    placed++;
+                } finally {
+                    if (probeDoc) {
+                        try {
+                            probeDoc.close(SaveOptions.DONOTSAVECHANGES);
+                        } catch (closeProbeError) {
+                            cleanupErrors[cleanupErrors.length] =
+                                "关闭拼图探测文档失败：" + errorText(closeProbeError);
+                        }
+                    }
+                    try {
+                        if (tempPng.exists) {
+                            tempPng.remove();
+                        }
+                    } catch (removeTempError) {
+                        cleanupErrors[cleanupErrors.length] =
+                            "无法删除拼图临时文件：" + tempPng.fsName;
+                    }
+                }
+            }
+
+            if (!failure && placed === 0) {
+                failure = {
+                    code: "NOTHING_TO_EXPORT",
+                    message: "所有可导出对象都是完全透明的，未导出。"
+                };
+            }
+
+            if (!failure) {
+                phase = "resize";
+                if (target.width !== original.width || target.height !== original.height) {
+                    // Downscale only, once, on the finished collage.
+                    collageDoc.resizeImage(UnitValue(target.width, "px"),
+                        UnitValue(target.height, "px"), doc.resolution,
+                        ResampleMethod.BICUBICSHARPER);
+                }
+
+                phase = "save";
+                if (format === "jpg") {
+                    fillWhiteAndFlatten(collageDoc);
+                }
+                var output = nextFreeTarget(folder, prefixCheck.prefix, args.digits, true, options);
+                if (!output.ok) {
+                    failure = {
+                        code: output.code,
+                        message: output.message
+                    };
+                } else {
+                    collageDoc.saveAs(new File(output.fullPath),
+                        saveOptionsFor(format, args.quality), true, Extension.LOWERCASE);
+                    var file = new File(output.fullPath);
+                    if (!file.exists) {
+                        failure = {
+                            code: "VERIFY_FAILED",
+                            message: "导出后找不到输出文件：" + output.fullPath
+                        };
+                    } else if (file.length <= 0) {
+                        try {
+                            file.remove();
+                        } catch (removeBrokenError) {
+                            // best effort: the failure below is the real result
+                        }
+                        failure = {
+                            code: "VERIFY_FAILED",
+                            message: "导出的文件为空（0 字节）：" + output.fullPath
+                        };
+                    } else {
+                        savedFile = {
+                            number: output.number,
+                            fileName: output.fileName,
+                            fullPath: output.fullPath
+                        };
+                    }
+                }
+            }
+        } catch (collageError) {
+            if (!failure) {
+                failure = {
+                    code: "COLLAGE_FAILED",
+                    message: "拼图导出失败：" + errorText(collageError)
+                };
+            }
+        } finally {
+            if (collageDoc) {
+                try {
+                    collageDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeCanvasError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "关闭拼图临时文档失败：" + errorText(closeCanvasError);
+                }
+                collageDoc = null;
+            }
+            if (workDoc) {
+                try {
+                    workDoc.close(SaveOptions.DONOTSAVECHANGES);
+                } catch (closeWorkError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "关闭拼图工作副本失败：" + errorText(closeWorkError);
+                }
+                workDoc = null;
+            }
+            for (var f = tempFiles.length - 1; f >= 0; f--) {
+                try {
+                    if (tempFiles[f].exists) {
+                        tempFiles[f].remove();
+                    }
+                } catch (removeLeftoverError) {
+                    cleanupErrors[cleanupErrors.length] =
+                        "遗留拼图临时文件：" + tempFiles[f].fsName;
+                }
+            }
+            try {
+                app.activeDocument = doc;
+            } catch (activateError) {
+                cleanupErrors[cleanupErrors.length] =
+                    "恢复源文档为活动文档失败：" + errorText(activateError);
+            }
+            try {
+                app.displayDialogs = oldDialogs;
+            } catch (dialogRestoreError) {
+                // ignore
+            }
+        }
+
+        if (failure) {
+            return fail(failure.code || "COLLAGE_FAILED", failure.message, {
+                columns: columns,
+                rows: rows,
+                originalWidth: original.width,
+                originalHeight: original.height,
+                targetWidth: target.width,
+                targetHeight: target.height,
+                total: totalTargets,
+                placedCount: placed,
+                placed: placedItems,
+                skipped: skipped,
+                converted: converted,
+                warnings: warnings,
+                cleanupErrors: cleanupErrors,
+                document: doc.name
+            });
+        }
+
+        var message = "拼图导出完成";
+        if (skipped.length > 0) {
+            message += "：已放入 " + placed + " 张，跳过 " + skipped.length + " 项";
+        }
+        return {
+            ok: true,
+            code: "OK",
+            message: message,
+            fileName: savedFile.fileName,
+            fullPath: savedFile.fullPath,
+            number: savedFile.number,
+            width: target.width,
+            height: target.height,
+            columns: columns,
+            rows: rows,
+            placedCount: placed,
+            placed: placedItems,
+            skipped: skipped,
+            total: totalTargets,
+            converted: converted,
+            warnings: warnings,
+            cleanupErrors: cleanupErrors,
+            document: doc.name,
+            originalWidth: original.width,
+            originalHeight: original.height
+        };
+    }
+
     function previewSelectedLayers(args) {
         if (app.documents.length === 0) {
             return fail("NO_DOCUMENT", "请先打开一个 Photoshop 文档");
@@ -1312,33 +1838,13 @@ var QPE = (function () {
         }
         var options = scanOptions(args);
 
-        var selection = readTargetLayerIds();
-        if (!selection.ok) {
-            return selection;
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
         }
-        var index = buildLayerIndex(doc);
-        var resolved = resolveTargets(index, selection.ids);
-        if (!resolved.ok) {
-            return resolved;
-        }
-
-        var exportable = [];
-        var knownSkips = [];
-        for (var i = 0; i < resolved.targets.length; i++) {
-            var target = resolved.targets[i];
-            var dependency = dependencyFor(target, index);
-            if (dependency) {
-                knownSkips[knownSkips.length] = {
-                    id: target.id,
-                    name: target.name,
-                    isGroup: target.isGroup,
-                    code: dependency.code,
-                    message: dependency.message
-                };
-            } else {
-                exportable[exportable.length] = target;
-            }
-        }
+        var exportable = collected.exportable;
+        var knownSkips = collected.knownSkips;
+        var i;
 
         var files = [];
         var folderAvailable = false;
@@ -1371,8 +1877,8 @@ var QPE = (function () {
         return {
             ok: true,
             document: doc.name,
-            selectionKey: selectionKeyOf(doc, selection.ids),
-            selectedCount: resolved.targets.length,
+            selectionKey: collected.selectionKey,
+            selectedCount: collected.resolved.targets.length,
             count: exportable.length,
             items: items,
             skipped: knownSkips,
@@ -1417,18 +1923,14 @@ var QPE = (function () {
             return fail("FOLDER_NOT_WRITABLE", writable.message);
         }
 
-        var selection = readTargetLayerIds();
-        if (!selection.ok) {
-            return selection;
+        var collected = collectSelection(doc);
+        if (!collected.ok) {
+            return collected;
         }
-        var sourceIndex = buildLayerIndex(doc);
-        var resolved = resolveTargets(sourceIndex, selection.ids);
-        if (!resolved.ok) {
-            return resolved;
-        }
-        var targets = resolved.targets;
+        var sourceIndex = collected.index;
+        var targets = collected.resolved.targets;
 
-        if (args.selectionKey && args.selectionKey !== selectionKeyOf(doc, selection.ids)) {
+        if (args.selectionKey && args.selectionKey !== collected.selectionKey) {
             return fail("SELECTION_CHANGED", "当前文档或选中的图层已发生变化，请刷新选择后重试");
         }
 
@@ -1460,7 +1962,7 @@ var QPE = (function () {
                 workDoc.bitsPerChannel = BitsPerChannelType.EIGHT;
             }
             if (workDoc.mode !== DocumentMode.RGB) {
-                workDoc.mode = DocumentMode.RGB;
+                workDoc.changeMode(ChangeMode.RGB); // assigning .mode is a silent no-op in CC 2019
             }
 
             var workIndex = buildLayerIndex(workDoc);
@@ -1690,6 +2192,8 @@ var QPE = (function () {
         exportPng: exportPng,
         previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
+        previewCollage: previewCollage,
+        exportCollage: exportCollage,
         pickFolder: pickFolder,
         openFolder: openFolder
     };
@@ -1732,6 +2236,8 @@ var QPE = (function () {
         exportPng: exportPng,
         previewSelectedLayers: previewSelectedLayers,
         exportSelectedLayers: exportSelectedLayers,
+        previewCollage: previewCollage,
+        exportCollage: exportCollage,
         pickFolder: pickFolder,
         openFolder: openFolder,
         call: call

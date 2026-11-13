@@ -1,14 +1,14 @@
 # Photoshop Quick PNG Export
 
-Photoshop PNG / JPG 导出面板，按 `前缀-编号.png`（或 `.jpg`）保存当前文档，或把当前选中的图层 / 图层组批量导出成多张图片。导出时读取目标文件夹中的已有编号，接续保存，避免覆盖同名文件。
+Photoshop PNG / JPG 导出面板，按 `前缀-编号.png`（或 `.jpg`）保存当前文档，把当前选中的图层 / 图层组批量导出成多张图片，或把这些选中对象拼成一张网格拼图。导出时读取目标文件夹中的已有编号，接续保存，避免覆盖同名文件。
 
 支持 PNG 与 JPG 两种格式、JPG 质量调节、导出前大小预估、透明背景、中文前缀和编号位数设置，并记住输出目录、格式与上次使用的前缀。
 
 ## 界面
 
-| 整张画面模式 | 选中图层模式 |
-| --- | --- |
-| <img src="docs/images/panel-document-mode.png" width="270" alt="整张画面模式：按前缀-编号导出当前文档"> | <img src="docs/images/panel-selection-mode.png" width="500" alt="选中图层模式：批量导出选中的图层/组"> |
+| 整张画面模式 | 选中图层模式 | 拼图模式 |
+| --- | --- | --- |
+| <img src="docs/images/panel-document-mode.png" width="270" alt="整张画面模式：按前缀-编号导出当前文档"> | <img src="docs/images/panel-selection-mode.png" width="500" alt="选中图层模式：批量导出选中的图层/组"> | <img src="docs/images/panel-collage-mode.png" width="330" alt="拼图模式：把选中对象拼成一张网格图"> |
 
 ## 安装
 
@@ -42,6 +42,16 @@ Windows 安装包：[下载最新版本](https://github.com/FleatherYu/photoshop
 
 - **整张画面**（默认）：导出当前文档的完整画面，一次一张；
 - **选中图层**：先在 Photoshop 图层面板里选中若干图层 / 组，再点导出。每个选中对象单独导出一张，按图层面板的从上到下顺序编号，沿用同一套 `前缀-编号.png` / `.jpg` 规则（编号策略同样生效）。导出前会在面板里列出将要导出的对象和预计文件名。
+- **拼图**：同样先在 Photoshop 里选中若干图层 / 组，再设置列数，点击「导出拼图 PNG」或「导出拼图 JPG」，把选中对象拼成一张网格图。每个格子是完整画布大小，对象保持它在原画布里的位置，不裁剪、不居中、不留缝；按面板顺序从左到右、从上到下填格。可以只缩小整张拼图的尺寸，不支持放大。
+
+拼图模式的约定：
+
+- 列数默认取 `√N` 向上取整（`N` 为可导出的对象数），修改过的列数会被记住；列数大于 `N` 时按 `N` 处理并提示；
+- 行数由 `ceil(N / 列数)` 自动计算，面板显示「N 张 → C 列 × R 行」以及原始拼图尺寸（列数 × 画布宽、行数 × 画布高）；
+- 目标宽 / 高锁定比例：填一个，另一个自动换算（至少 1 px）；两个都空表示保持原始尺寸；输入大于原始尺寸会提示且不导出（不支持放大）；
+- 拼图是一张图，编号、格式、JPG 质量、编号策略和输出目录规则与 1.2.0 完全一致，不覆盖已有文件；
+- 完全透明的对象、与外部有依赖的对象会被跳过且不占格子，结果里会说明原因；末尾没有填满的格子，PNG 是透明的，JPG 是白色的；
+- 目标尺寸不会跨选择保留：切换选择或文档时清空，避免用旧尺寸误导出。
 
 选中图层模式下的约定：
 
@@ -119,9 +129,10 @@ node --test --test-isolation=none "tests/*.test.mjs"
 powershell -ExecutionPolicy Bypass -File scripts\verify-photoshop.ps1
 powershell -ExecutionPolicy Bypass -File scripts\verify-batch-photoshop.ps1
 powershell -ExecutionPolicy Bypass -File scripts\verify-jpg-photoshop.ps1
+powershell -ExecutionPolicy Bypass -File scripts\verify-collage-photoshop.ps1
 ```
 
-`verify-batch-photoshop.ps1` 会跑 `tests/photoshop/batch-acceptance.jsx`（真实多选、组内剪贴 / 隐藏子层、16 位转换、外部剪贴依赖、空文档、displayDialogs 恢复等），并检查导出的 PNG 像素。`verify-jpg-photoshop.ps1` 会跑 `tests/photoshop/jpg-acceptance.jsx`，覆盖 JPG 质量与预估大小、透明填白、两种编号策略、批量 JPG 跳过空对象等场景，并检查 JPEG 签名与像素。
+`verify-batch-photoshop.ps1` 会跑 `tests/photoshop/batch-acceptance.jsx`（真实多选、组内剪贴 / 隐藏子层、16 位转换、外部剪贴依赖、空文档、displayDialogs 恢复等），并检查导出的 PNG 像素。`verify-jpg-photoshop.ps1` 会跑 `tests/photoshop/jpg-acceptance.jsx`，覆盖 JPG 质量与预估大小、透明填白、两种编号策略、批量 JPG 跳过空对象等场景，并检查 JPEG 签名与像素。`verify-collage-photoshop.ps1` 会跑 `tests/photoshop/collage-acceptance.jsx`，逐格取像素验证拼图顺序与位置、空格子透明 / 白色、目标尺寸与放大拒绝、跳过项不占格、源文档不变与临时文件清理。
 
 - 验收记录：[`docs/acceptance.md`](docs/acceptance.md)
 - 设计说明：[`docs/design.md`](docs/design.md)
@@ -134,6 +145,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-jpg-photoshop.ps1
 - 输出目录必须已存在，面板不会自动创建文件夹。
 - 大小预估需要临时保存一次文件，文档很大时会多花几秒；期间面板仍可操作，但导出会等估算结束或直接以导出优先。
 - JPG 固定把透明区域填成白色，暂不提供自定义底色、渐进式或元数据选项。
+- 拼图固定「格子 = 完整画布」、无缝隙无外边距、按行优先填充，不提供自定义间距、底色、裁剪到内容、对齐或放大；对象很多或画布很大时，拼图尺寸增长很快（单边超过 Photoshop 的 300000 px 上限会直接报错）。
 - 安装脚本仅支持 Windows；macOS 尚未实测，也未提供安装脚本。
 
 ## 后续计划

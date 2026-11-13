@@ -97,3 +97,62 @@ test("typing a prefix stops the document-name default from being re-applied", ()
   assert.ok(refresh, "refreshDocument not found");
   assert.match(refresh[1], /result\.name !== state\.lastDocName/);
 });
+
+test("collage mode exposes the grid UI and reuses the shared core rules", () => {
+  assert.match(html, /data-mode="collage"/);
+  // The pure helpers live in jsx/core.jsx and must load before the panel code.
+  const coreScript = html.indexOf('src="jsx/core.jsx"');
+  const bridgeScript = html.indexOf('src="js/cep-bridge.js"');
+  assert.ok(coreScript >= 0, "index.html does not load jsx/core.jsx");
+  assert.ok(bridgeScript >= 0, "index.html does not load js/cep-bridge.js");
+  assert.ok(coreScript < bridgeScript, "jsx/core.jsx must load before js/cep-bridge.js");
+
+  for (const id of [
+    "collage-box", "collage-columns", "collage-grid", "collage-original",
+    "collage-width", "collage-height", "collage-size-hint", "collage-list"
+  ]) {
+    assert.ok(html.includes(`id="${id}"`), `missing collage element: ${id}`);
+  }
+  for (const label of ["拼图", "列数", "原始尺寸", "目标尺寸"]) {
+    assert.ok(html.includes(label), `missing collage UI text: ${label}`);
+  }
+
+  const columns = /<input id="collage-columns"[^>]*>/.exec(html);
+  assert.ok(columns, "collage columns input not found");
+  assert.match(columns[0], /type="number"/);
+  assert.match(columns[0], /min="1"/);
+  assert.match(columns[0], /step="1"/);
+  for (const id of ["collage-width", "collage-height"]) {
+    const input = new RegExp(`<input id="${id}"[^>]*>`).exec(html);
+    assert.ok(input, `${id} input not found`);
+    assert.match(input[0], /type="number"/);
+    assert.match(input[0], /min="1"/);
+  }
+
+  // Grid math and target clamping come from QPECore, never re-implemented here.
+  // The automatic column count is reached through normalizeCollageColumns.
+  for (const rule of [
+    "QPECore.collageRows",
+    "QPECore.normalizeCollageColumns",
+    "QPECore.collageOriginalSize",
+    "QPECore.resolveCollageTarget"
+  ]) {
+    assert.ok(panel.includes(rule), `panel does not reuse ${rule}`);
+  }
+  assert.match(panel, /CEPBridge\.call\("previewCollage"/);
+  assert.match(panel, /CEPBridge\.call\("exportCollage"/);
+  assert.ok(panel.includes("导出拼图 "), "missing collage export label");
+  assert.ok(panel.includes("正在导出拼图…"), "missing collage busy label");
+  assert.ok(panel.includes("SELECTION_CHANGED"), "panel ignores SELECTION_CHANGED");
+
+  // Target size is in-memory only: the panel must not persist it.
+  assert.equal(/qpe\.collageTarget/.test(panel), false, "collage target must not use localStorage");
+});
+
+test("collage inputs are disabled while an export is running", () => {
+  const setBusy = /function setBusy\(busy\)\s*\{([\s\S]*?)\n    \}/.exec(panel);
+  assert.ok(setBusy, "setBusy not found");
+  for (const input of ["collageColumns", "collageWidth", "collageHeight"]) {
+    assert.match(setBusy[1], new RegExp(`els\\.${input}\\.disabled\\s*=\\s*busy`));
+  }
+});

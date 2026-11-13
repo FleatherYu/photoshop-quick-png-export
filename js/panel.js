@@ -18,7 +18,8 @@
         mode: "qpe.mode",
         format: "qpe.format",
         quality: "qpe.quality",
-        numbering: "qpe.numbering"
+        numbering: "qpe.numbering",
+        collageColumns: "qpe.collageColumns"
     };
     var PREVIEW_DEBOUNCE_MS = 180;
     var DOC_POLL_MS = 5000;
@@ -52,7 +53,31 @@
         docFingerprint: "",
         prefixEdited: false,
         // Snapshot of the selection preview; export refuses to run on a stale one.
-        selectionKey: ""
+        selectionKey: "",
+        // ---- collage mode (1.3.0) ----
+        // null = automatic columns (ceil(sqrt(N))); a number = user's choice.
+        collageColumnsEdited: null,
+        collageCount: 0,
+        collageDocWidth: 0,
+        collageDocHeight: 0,
+        collageColumns: 0,
+        collageRows: 0,
+        collageOriginalWidth: 0,
+        collageOriginalHeight: 0,
+        // Set while the user is typing in the columns field so a host answer
+        // never overwrites the half-typed value.
+        collageColumnsEditing: false,
+        // True while the effective columns had to be clamped to N.
+        collageClampNotice: false,
+        // Selection/document key the collage preview belongs to.
+        collageSelectionKey: "",
+        collageDocKey: null,
+        // Target size lives in memory only: it is never persisted, and it is
+        // cleared whenever the selection or the document changes.
+        collageTargetWidth: null,
+        collageTargetHeight: null,
+        collageTargetDriver: null,
+        collageTargetError: ""
     };
 
     function byId(id) {
@@ -85,13 +110,18 @@
         state.lastFolder = storeGet(STORAGE_KEYS.lastFolder, "") || state.folder;
         state.folderMode = storeGet(STORAGE_KEYS.folderMode, "") === "last" ? "last" : "document";
         state.folderSource = state.folder ? "last" : "";
-        state.mode = storeGet(STORAGE_KEYS.mode, "document") === "selection" ? "selection" : "document";
+        var storedMode = storeGet(STORAGE_KEYS.mode, "document");
+        state.mode = (storedMode === "selection" || storedMode === "collage")
+            ? storedMode
+            : "document";
         state.format = storeGet(STORAGE_KEYS.format, "") === FORMAT_JPG ? FORMAT_JPG : FORMAT_PNG;
         var quality = parseInt(storeGet(STORAGE_KEYS.quality, "10"), 10);
         state.quality = (quality >= 0 && quality <= 12) ? quality : 10;
         state.numbering = storeGet(STORAGE_KEYS.numbering, "") === "separate" ? "separate" : "shared";
         var digits = parseInt(storeGet(STORAGE_KEYS.digits, "2"), 10);
         state.digits = (digits === 1 || digits === 2 || digits === 3) ? digits : 2;
+        var storedColumns = parseInt(storeGet(STORAGE_KEYS.collageColumns, ""), 10);
+        state.collageColumnsEdited = (storedColumns > 0) ? storedColumns : null;
     }
 
     /* ---------- rendering ---------- */
@@ -129,9 +159,10 @@
     function renderFormat() {
         setSegPressed(els.format, "data-format", state.format);
         els.qualityRow.classList.toggle("hidden", state.format !== FORMAT_JPG);
-        // Size estimates only make sense for the whole document; batch mode
-        // exports one isolated object per file, so there is no single size.
-        els.estimateRow.classList.toggle("hidden", state.mode === "selection");
+        // Size estimates only make sense for the whole document; batch and
+        // collage modes export composite images, so there is no single size.
+        els.estimateRow.classList.toggle("hidden",
+            state.mode === "selection" || state.mode === "collage");
         els.exportBtn.textContent = exportLabel();
         renderQuality();
     }
@@ -183,12 +214,16 @@
             return state.busy ? "正在批量导出…" : "批量导出选中图层";
         }
         var formatName = state.format === FORMAT_JPG ? "JPG" : "PNG";
+        if (state.mode === "collage") {
+            return state.busy ? "正在导出拼图…" : "导出拼图 " + formatName;
+        }
         return state.busy ? "正在导出…" : "快速导出 " + formatName;
     }
 
     function renderMode() {
         setSegPressed(els.mode, "data-mode", state.mode);
         els.selectionBox.classList.toggle("hidden", state.mode !== "selection");
+        els.collageBox.classList.toggle("hidden", state.mode !== "collage");
         renderFormat();
     }
 
@@ -271,6 +306,7 @@
                 state.docKey = null;
                 state.docFingerprint = "";
                 setEstimate("—");
+                resetCollagePreview();
                 return;
             }
             els.docInfo.textContent =
@@ -286,6 +322,9 @@
                 state.docKey = docKey;
                 // A different document starts with its own folder choice.
                 state.folderEdited = false;
+                // Collage target sizes belong to one document only.
+                clearCollageTarget();
+                state.collageDocKey = null;
             }
 
             if (result.name !== state.lastDocName) {
@@ -302,9 +341,9 @@
                 invalidateEstimate();
             }
 
-            if (state.mode === "selection") {
+            if (state.mode === "selection" || state.mode === "collage") {
                 // The selection can change in Photoshop at any time; the 5 s
-                // poll keeps the batch count and the export key fresh.
+                // poll keeps the batch / collage count and the export key fresh.
                 schedulePreview();
             }
         });
@@ -390,6 +429,8 @@
     function updatePreview() {
         if (state.mode === "selection") {
             updateSelectionPreview();
+        } else if (state.mode === "collage") {
+            updateCollagePreview();
         } else {
             updateDocumentPreview();
         }
@@ -514,6 +555,325 @@
         });
     }
 
+    /* ---------- collage ---------- */
+
+    // Target sizes are per-document memory only: never persisted, and dropped
+    // as soon as the selection or the document changes.
+    function clearCollageTarget() {
+        state.collageTargetWidth = null;
+        state.collageTargetHeight = null;
+        state.collageTargetDriver = null;
+        state.collageTargetError = "";
+        if (els.collageWidth) {
+            els.collageWidth.value = "";
+            els.collageHeight.value = "";
+        }
+    }
+
+    function resetCollagePreview() {
+        state.collageCount = 0;
+        state.collageColumns = 0;
+        state.collageRows = 0;
+        state.collageOriginalWidth = 0;
+        state.collageOriginalHeight = 0;
+        state.collageSelectionKey = "";
+        state.collageDocKey = null;
+        state.collageClampNotice = false;
+        clearCollageTarget();
+        if (els.collageGrid) {
+            els.collageGrid.textContent = "—";
+            els.collageGrid.className = "collage-grid";
+            els.collageOriginal.textContent = "—";
+            els.collageList.textContent = "";
+            els.collageColumns.value = "";
+            els.collageSizeHint.textContent = "—";
+            els.collageSizeHint.className = "hint";
+        }
+    }
+
+    // Reads the current geometry from the shared QPECore rules: the panel never
+    // duplicates the grid math, it only renders it.
+    function collageGeometry() {
+        var count = state.collageCount;
+        if (!count || !state.collageDocWidth || !state.collageDocHeight) {
+            return null;
+        }
+        var effective = QPECore.normalizeCollageColumns(state.collageColumnsEdited, count);
+        var columns = effective.columns;
+        var rows = QPECore.collageRows(count, columns);
+        var original = QPECore.collageOriginalSize(
+            columns, rows, state.collageDocWidth, state.collageDocHeight);
+        return {
+            count: count,
+            columns: columns,
+            rows: rows,
+            original: original,
+            clamped: effective.clamped
+        };
+    }
+
+    function renderCollageGrid() {
+        var geometry = collageGeometry();
+        if (!geometry) {
+            state.collageColumns = 0;
+            state.collageRows = 0;
+            state.collageOriginalWidth = 0;
+            state.collageOriginalHeight = 0;
+            if (!state.collageColumnsEditing) {
+                els.collageColumns.value = "";
+            }
+            els.collageGrid.textContent = "—";
+            els.collageGrid.className = "collage-grid";
+            els.collageOriginal.textContent = "—";
+            renderCollageSizeHint();
+            return;
+        }
+        state.collageColumns = geometry.columns;
+        state.collageRows = geometry.rows;
+        state.collageOriginalWidth = geometry.original.width;
+        state.collageOriginalHeight = geometry.original.height;
+        if (!state.collageColumnsEditing) {
+            els.collageColumns.value = String(geometry.columns);
+        }
+        els.collageGrid.textContent = geometry.count + " 张 → " +
+            geometry.columns + " 列 × " + geometry.rows + " 行";
+        els.collageGrid.className = "collage-grid" +
+            (state.collageClampNotice ? " warn" : "");
+        els.collageOriginal.textContent =
+            geometry.original.width + " × " + geometry.original.height + " px";
+        renderCollageSizeHint();
+    }
+
+    function renderCollageSizeHint() {
+        var hint;
+        if (state.collageTargetError) {
+            hint = state.collageTargetError;
+            els.collageSizeHint.textContent = hint;
+            els.collageSizeHint.className = "hint error";
+            return;
+        }
+        if (!state.collageOriginalWidth || !state.collageOriginalHeight) {
+            hint = (state.collageCount === 0 && state.collageSelectionKey)
+                ? "没有可放入拼图的对象，原因见上方列表。"
+                : "正在读取当前选择…";
+            els.collageSizeHint.textContent = hint;
+            els.collageSizeHint.className = "hint " +
+                ((state.collageCount === 0 && state.collageSelectionKey) ? "warn" : "placeholder");
+            return;
+        }
+        var width = state.collageTargetWidth || state.collageOriginalWidth;
+        var height = state.collageTargetHeight || state.collageOriginalHeight;
+        hint = "原始 " + state.collageOriginalWidth + " × " + state.collageOriginalHeight +
+            " → 导出 " + width + " × " + height;
+        var kind = "";
+        if (state.collageClampNotice) {
+            hint += "；列数已按 " + state.collageCount + " 张限制为 " +
+                state.collageColumns + " 列";
+            kind = "warn";
+        }
+        els.collageSizeHint.textContent = hint;
+        els.collageSizeHint.className = "hint" + (kind ? " " + kind : "");
+    }
+
+    function trimInputValue(element) {
+        var value = element.value;
+        return String(value === null || value === undefined ? "" : value)
+            .replace(/^\s+|\s+$/g, "");
+    }
+
+    // Target width and height keep the original aspect ratio: typing one fills
+    // the other. Both empty means "use the original collage size".
+    function updateCollageTarget(driver) {
+        var originalWidth = state.collageOriginalWidth;
+        var originalHeight = state.collageOriginalHeight;
+        if (!originalWidth || !originalHeight) {
+            return;
+        }
+        var widthText = trimInputValue(els.collageWidth);
+        var heightText = trimInputValue(els.collageHeight);
+        if (!widthText && !heightText) {
+            state.collageTargetWidth = null;
+            state.collageTargetHeight = null;
+            state.collageTargetDriver = null;
+            state.collageTargetError = "";
+            renderCollageSizeHint();
+            return;
+        }
+        if (driver === "width" && !widthText) {
+            driver = "height";
+        }
+        if (driver === "height" && !heightText) {
+            driver = "width";
+        }
+        var result = (driver === "height")
+            ? QPECore.resolveCollageTarget(originalWidth, originalHeight, null, heightText)
+            : QPECore.resolveCollageTarget(originalWidth, originalHeight, widthText, null);
+        if (!result.ok) {
+            state.collageTargetWidth = null;
+            state.collageTargetHeight = null;
+            state.collageTargetError = result.message;
+            renderCollageSizeHint();
+            return;
+        }
+        state.collageTargetError = "";
+        if (result.source === "original") {
+            state.collageTargetWidth = null;
+            state.collageTargetHeight = null;
+            state.collageTargetDriver = null;
+            els.collageWidth.value = "";
+            els.collageHeight.value = "";
+        } else {
+            state.collageTargetWidth = result.width;
+            state.collageTargetHeight = result.height;
+            state.collageTargetDriver = driver;
+            if (driver === "height") {
+                els.collageWidth.value = String(result.width);
+            } else {
+                els.collageHeight.value = String(result.height);
+            }
+        }
+        renderCollageSizeHint();
+    }
+
+    function readCollageColumnsInput() {
+        var text = trimInputValue(els.collageColumns);
+        if (!text) {
+            return null;
+        }
+        var value = Math.round(Number(text));
+        if (!isFinite(value) || value < 1) {
+            return null;
+        }
+        return value;
+    }
+
+    function onCollageColumnsInput() {
+        if (state.busy) {
+            return;
+        }
+        // Immediate feedback while typing; the value is not written back yet.
+        state.collageColumnsEditing = true;
+        var value = readCollageColumnsInput();
+        state.collageColumnsEdited = value;
+        state.collageClampNotice =
+            (value !== null && state.collageCount > 0 && value > state.collageCount);
+        renderCollageGrid();
+    }
+
+    function onCollageColumnsChange() {
+        if (state.busy) {
+            return;
+        }
+        state.collageColumnsEditing = false;
+        if (state.collageCount > 0) {
+            var normalized = QPECore.normalizeCollageColumns(
+                els.collageColumns.value, state.collageCount);
+            state.collageColumnsEdited = normalized.columns;
+            state.collageClampNotice = normalized.clamped;
+            storeSet(STORAGE_KEYS.collageColumns, String(normalized.columns));
+            els.collageColumns.value = String(normalized.columns);
+        } else {
+            var value = readCollageColumnsInput();
+            state.collageColumnsEdited = value;
+            if (value !== null) {
+                storeSet(STORAGE_KEYS.collageColumns, String(value));
+            }
+        }
+        renderCollageGrid();
+        renderCollageSizeHint();
+    }
+
+    // Collage preview: the host scans the current selection, drops objects that
+    // cannot be composed (clipping dependencies etc.) and returns the effective
+    // N. Grid math runs in the panel through QPECore.
+    function updateCollagePreview() {
+        var token = state.previewToken + 1;
+        state.previewToken = token;
+
+        if (!state.prefix.trim()) {
+            els.nextFile.textContent = "—";
+            setHint("填写前缀后这里会显示导出名称", "placeholder");
+            return;
+        }
+
+        CEPBridge.call("previewCollage", scanArguments(), function (result) {
+            if (token !== state.previewToken) {
+                return;
+            }
+            if (!result.ok) {
+                state.collageSelectionKey = "";
+                state.collageCount = 0;
+                state.collageClampNotice = false;
+                clearCollageTarget();
+                els.nextFile.textContent = "—";
+                els.collageGrid.textContent = "—";
+                els.collageGrid.className = "collage-grid";
+                els.collageOriginal.textContent = "—";
+                els.collageList.textContent = "";
+                els.collageColumns.value = "";
+                els.collageSizeHint.textContent = result.message || "无法读取当前选择";
+                els.collageSizeHint.className = "hint warn";
+                setHint(result.message || "无法读取当前选择", "warn");
+                return;
+            }
+
+            var docKey = (result.document || "") + "|" +
+                result.documentWidth + "×" + result.documentHeight;
+            var selectionChanged = (result.selectionKey || "") !== state.collageSelectionKey;
+            var documentChanged = docKey !== state.collageDocKey;
+            if (selectionChanged || documentChanged) {
+                clearCollageTarget();
+                state.collageSelectionKey = result.selectionKey || "";
+                state.collageDocKey = docKey;
+                state.collageClampNotice = false;
+            }
+
+            state.collageCount = result.count || 0;
+            state.collageDocWidth = result.documentWidth || 0;
+            state.collageDocHeight = result.documentHeight || 0;
+            if (state.collageColumnsEdited !== null && state.collageCount > 0 &&
+                state.collageColumnsEdited > state.collageCount) {
+                state.collageClampNotice = true;
+            }
+
+            renderCollageGrid();
+
+            var lines = [];
+            var items = result.items || [];
+            for (var i = 0; i < items.length; i++) {
+                lines[lines.length] = "· " + (items[i].isGroup ? "组 " : "") + items[i].name;
+            }
+            var skipped = result.skipped || [];
+            for (i = 0; i < skipped.length; i++) {
+                lines[lines.length] = "× " + (skipped[i].isGroup ? "组 " : "") +
+                    skipped[i].name + "：" + (skipped[i].message || skipped[i].code);
+            }
+            els.collageList.textContent = lines.join("\n");
+
+            if (!state.collageCount) {
+                els.nextFile.textContent = "—";
+                setHint(result.selectedCount === 0
+                    ? "请先在 Photoshop 中选中图层或图层组"
+                    : "选中的对象都无法放入拼图，原因见上方列表", "warn");
+                renderCollageSizeHint();
+                return;
+            }
+
+            els.nextFile.textContent = result.fileName || "—";
+            var hint;
+            if (result.folderAvailable === false) {
+                hint = "尚未选择目录，从 1 开始计算";
+            } else if (result.existingCount > 0) {
+                hint = "目录中已有 " + result.existingCount +
+                    " 个同前缀文件，最大序号 " + result.maxNumber;
+            } else {
+                hint = "目录中没有同前缀文件，从 1 开始";
+            }
+            setHint(hint + "；拼图导出为单张图片，跳过项不占格");
+            renderCollageSizeHint();
+        });
+    }
+
     /* ---------- folder ---------- */
 
     function rememberFolder(folder) {
@@ -568,6 +928,9 @@
         els.prefix.disabled = busy;
         els.refreshSelection.disabled = busy;
         els.quality.disabled = busy;
+        els.collageColumns.disabled = busy;
+        els.collageWidth.disabled = busy;
+        els.collageHeight.disabled = busy;
         var i;
         var modeButtons = els.mode.querySelectorAll("button");
         for (i = 0; i < modeButtons.length; i++) {
@@ -602,6 +965,8 @@
     function doExport() {
         if (state.mode === "selection") {
             doExportSelection();
+        } else if (state.mode === "collage") {
+            doExportCollage();
         } else {
             doExportDocument();
         }
@@ -709,6 +1074,141 @@
             updatePreview();
             refreshDocument();
         });
+    }
+
+    function doExportCollage() {
+        if (state.busy) {
+            return;
+        }
+        if (!state.prefix.trim()) {
+            setStatus("error", "请输入文件名前缀");
+            els.prefix.focus();
+            return;
+        }
+        if (!state.folder) {
+            setStatus("error", "请选择输出文件夹");
+            return;
+        }
+        if (!state.collageSelectionKey) {
+            setStatus("error", "还没有读取到当前选择，请先选中图层并等待预览更新。");
+            updatePreview();
+            return;
+        }
+
+        // Re-validate the target against the same rules the host applies; a
+        // stale/oversized target must never reach the export call.
+        var targetWidth = null;
+        var targetHeight = null;
+        if (state.collageCount > 0 &&
+            state.collageOriginalWidth && state.collageOriginalHeight) {
+            var target = QPECore.resolveCollageTarget(
+                state.collageOriginalWidth,
+                state.collageOriginalHeight,
+                state.collageTargetWidth,
+                state.collageTargetHeight);
+            if (!target.ok || state.collageTargetError) {
+                var message = state.collageTargetError ||
+                    target.message || "目标尺寸无效";
+                setStatus("error", message + " 请调整目标尺寸后再导出。");
+                els.collageWidth.focus();
+                return;
+            }
+            if (target.source !== "original") {
+                targetWidth = target.width;
+                targetHeight = target.height;
+            }
+        }
+
+        setBusy(true);
+        setStatus("busy", "正在导出拼图，请稍候…");
+
+        var args = scanArguments();
+        args.columns = state.collageColumns || null;
+        args.targetWidth = targetWidth;
+        args.targetHeight = targetHeight;
+        args.selectionKey = state.collageSelectionKey;
+
+        CEPBridge.call("exportCollage", args, function (result) {
+            setBusy(false);
+
+            if (result.code === "SELECTION_CHANGED") {
+                state.collageSelectionKey = "";
+                state.collageCount = 0;
+                setStatus("error", "选中的图层或文档已发生变化，已重新读取，请确认后再导出。");
+                updatePreview();
+                return;
+            }
+
+            renderCollageResult(result);
+            if (result.ok) {
+                rememberExportFolder();
+            }
+            updatePreview();
+            refreshDocument();
+        });
+    }
+
+    // Collage results always show the file, the final pixel size, how many
+    // objects were placed and which ones were skipped (with the reason).
+    function renderCollageResult(result) {
+        var lines = [];
+        if (result.ok) {
+            lines[lines.length] = "已导出拼图：" + result.fileName +
+                "（" + result.width + " × " + result.height + " px，放入 " +
+                result.placedCount + " 个对象）";
+        } else {
+            lines[lines.length] = result.message || "拼图导出失败";
+        }
+        var skipped = result.skipped || [];
+        for (var i = 0; i < skipped.length; i++) {
+            lines[lines.length] = "跳过 " + (skipped[i].name || "对象") + "：" +
+                (skipped[i].message || skipped[i].code);
+        }
+        var warnings = result.warnings || [];
+        for (i = 0; i < warnings.length; i++) {
+            lines[lines.length] = warnings[i];
+        }
+        setStatus(result.ok ? "ok" : "error", lines.join("\n"));
+
+        var details = [];
+        if (result.ok) {
+            if (result.fullPath) {
+                details[details.length] = "文件  " + result.fullPath;
+            }
+            if (result.width && result.height) {
+                details[details.length] = "尺寸  " + result.width + " × " +
+                    result.height + " px";
+            }
+            if (result.originalWidth && result.originalHeight) {
+                details[details.length] = "原始  " + result.originalWidth + " × " +
+                    result.originalHeight + " px（" + result.columns + " 列 × " +
+                    result.rows + " 行）";
+            }
+            if (typeof result.placedCount === "number") {
+                details[details.length] = "放入  " + result.placedCount + " 个对象";
+            }
+        }
+        for (i = 0; i < skipped.length; i++) {
+            details[details.length] = "跳过  " + (skipped[i].name || "对象") + "  —  " +
+                (skipped[i].message || skipped[i].code);
+        }
+        for (i = 0; i < warnings.length; i++) {
+            details[details.length] = "提示  " + warnings[i];
+        }
+        var cleanupErrors = result.cleanupErrors || [];
+        for (i = 0; i < cleanupErrors.length; i++) {
+            details[details.length] = "清理  " + cleanupErrors[i];
+        }
+        els.batchDetailsBody.textContent = details.join("\n");
+        els.batchDetails.classList.toggle("hidden", details.length === 0);
+        els.batchDetails.open = details.length > 0;
+
+        if (result.ok && result.fullPath) {
+            state.lastPath = result.fullPath;
+            els.lastPath.textContent = state.lastPath;
+            els.lastPath.title = state.lastPath;
+            els.last.classList.remove("hidden");
+        }
     }
 
     function renderBatchResult(result) {
@@ -941,19 +1441,38 @@
                 return;
             }
             var mode = button.getAttribute("data-mode");
-            if (mode !== "document" && mode !== "selection") {
+            if (mode !== "document" && mode !== "selection" && mode !== "collage") {
                 return;
             }
             state.mode = mode;
             storeSet(STORAGE_KEYS.mode, mode);
             renderMode();
-            setStatus("info", mode === "selection"
-                ? "选中图层模式：在 Photoshop 中选中若干图层或组，导出的每张图片只显示一个对象。"
-                : "整图模式：导出一张包含全部可见图层的图片。");
+            if (mode === "collage") {
+                setStatus("info", "拼图模式：把选中的图层或组按网格拼成一张图导出。");
+            } else if (mode === "selection") {
+                setStatus("info", "选中图层模式：在 Photoshop 中选中若干图层或组，导出的每张图片只显示一个对象。");
+            } else {
+                setStatus("info", "整图模式：导出一张包含全部可见图层的图片。");
+            }
             if (mode === "document") {
                 invalidateEstimate();
             }
             updatePreview();
+        });
+
+        els.collageColumns.addEventListener("input", onCollageColumnsInput);
+        els.collageColumns.addEventListener("change", onCollageColumnsChange);
+        els.collageWidth.addEventListener("input", function () {
+            if (state.busy) {
+                return;
+            }
+            updateCollageTarget("width");
+        });
+        els.collageHeight.addEventListener("input", function () {
+            if (state.busy) {
+                return;
+            }
+            updateCollageTarget("height");
         });
 
         els.folderPath.addEventListener("click", function () {
@@ -998,6 +1517,14 @@
         els.selectionSummary = byId("selection-summary");
         els.selectionList = byId("selection-list");
         els.refreshSelection = byId("refresh-selection");
+        els.collageBox = byId("collage-box");
+        els.collageColumns = byId("collage-columns");
+        els.collageGrid = byId("collage-grid");
+        els.collageOriginal = byId("collage-original");
+        els.collageWidth = byId("collage-width");
+        els.collageHeight = byId("collage-height");
+        els.collageSizeHint = byId("collage-size-hint");
+        els.collageList = byId("collage-list");
         els.batchDetails = byId("batch-details");
         els.batchDetailsBody = byId("batch-details-body");
         els.settings = byId("settings");

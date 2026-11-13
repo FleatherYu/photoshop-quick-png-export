@@ -68,6 +68,7 @@ function makeElement(id) {
     },
     appendChild() {},
     removeChild() {},
+    focus() {},
     fire(type, event) {
       (element.handlers[type] || []).forEach((handler) =>
         handler(event || { target: element, key: "", preventDefault() {} }));
@@ -111,12 +112,33 @@ function bootPanel(options) {
     "selection-summary", "selection-list", "refresh-selection", "batch-details",
     "batch-details-body", "format", "quality-row", "quality", "quality-value",
     "folder-source", "estimate-row", "estimate-value", "settings", "numbering",
-    "folder-mode"
+    "folder-mode", "collage-box", "collage-columns", "collage-grid",
+    "collage-original", "collage-width", "collage-height", "collage-size-hint",
+    "collage-list"
   ];
   const elements = new Map(ids.map((id) => [id, makeElement(id)]));
   const storage = new Map(Object.entries(settings.initialStorage || {}));
   const pollCallbacks = [];
   const requests = [];
+
+  // Mutable collage preview state: tests can change the selection key to make
+  // the panel believe the Photoshop selection has moved.
+  const collage = {
+    selectionKey: "sel-1",
+    count: 3,
+    documentWidth: 1080,
+    documentHeight: 1920,
+    items: [
+      { id: 2, name: "标题文字", isGroup: false },
+      { id: 3, name: "产品图", isGroup: false },
+      { id: 5, name: "装饰组", isGroup: true }
+    ],
+    skipped: [
+      { id: 9, name: "剪贴高光", isGroup: false, code: "CLIPPING_DEPENDENCY",
+        message: "依赖下方图层（剪贴蒙版），已跳过" }
+    ],
+    fileName: "示例海报-04.png"
+  };
 
   const formatContainer = elements.get("format");
   const pngButton = makeButton(formatContainer, { "data-format": "png" });
@@ -132,6 +154,7 @@ function bootPanel(options) {
   const setStatusResult = (result) => {
     currentStatus = result;
   };
+  let exportCollageResult = settings.exportCollageResult || null;
 
   const bridge = {
     isMock() {
@@ -152,6 +175,53 @@ function bootPanel(options) {
           maxNumber: 0,
           existingCount: 0,
           folderAvailable: true
+        });
+        return;
+      }
+      if (method === "previewCollage") {
+        callback({
+          ok: true,
+          document: "A.psd",
+          documentWidth: collage.documentWidth,
+          documentHeight: collage.documentHeight,
+          selectionKey: collage.selectionKey,
+          selectedCount: collage.items.length + collage.skipped.length,
+          count: collage.count,
+          items: collage.items,
+          skipped: collage.skipped,
+          folderAvailable: true,
+          fileName: collage.fileName,
+          startNumber: 4,
+          maxNumber: 3,
+          existingCount: 2,
+          warnings: []
+        });
+        return;
+      }
+      if (method === "exportCollage") {
+        if (exportCollageResult) {
+          callback(exportCollageResult);
+          return;
+        }
+        callback({
+          ok: true,
+          code: "OK",
+          message: "拼图导出完成：放入 3 个对象，跳过 1 项",
+          completed: true,
+          fileName: "示例海报-04.png",
+          fullPath: "D:\\work\\A\\示例海报-04.png",
+          number: 4,
+          width: Number(args.targetWidth) || collage.documentWidth * 2,
+          height: Number(args.targetHeight) || collage.documentHeight * 2,
+          columns: args.columns || 2,
+          rows: 2,
+          placedCount: 3,
+          placed: [],
+          skipped: collage.skipped,
+          converted: false,
+          warnings: [],
+          originalWidth: collage.documentWidth * 2,
+          originalHeight: collage.documentHeight * 2
         });
         return;
       }
@@ -209,6 +279,9 @@ function bootPanel(options) {
   context.window = window;
   context.document = document;
 
+  runInContext(readFileSync(join(repoRoot, "jsx", "core.jsx"), "utf8"), context, {
+    filename: "jsx/core.jsx"
+  });
   runInContext(readFileSync(join(repoRoot, "js", "panel.js"), "utf8"), context, {
     filename: "js/panel.js"
   });
@@ -219,6 +292,12 @@ function bootPanel(options) {
     pollCallbacks,
     requests,
     setStatusResult,
+    setCollageSelectionKey(key) {
+      collage.selectionKey = key;
+    },
+    setExportCollageResult(result) {
+      exportCollageResult = result;
+    },
     poll() {
       pollCallbacks[0]();
     },
@@ -381,4 +460,98 @@ test("format, quality and numbering choices are persisted", () => {
   assert.ok(estimates.length >= 2);
   assert.equal(estimates[estimates.length - 1].args.format, "jpg");
   assert.equal(estimates[estimates.length - 1].args.quality, 4);
+});
+
+function bootCollage() {
+  return bootPanel({
+    initialStorage: { "qpe.mode": "collage" },
+    initialStatus: docStatus("A.psd", "D:\\work\\A")
+  });
+}
+
+test("collage export sends the grid, target size and selection key", () => {
+  const panel = bootCollage();
+  const width = panel.elements.get("collage-width");
+  const height = panel.elements.get("collage-height");
+
+  width.value = "1000";
+  width.fire("input");
+  assert.equal(height.value, "1778");
+
+  panel.elements.get("export").fire("click");
+
+  const request = panel.requests.find((entry) => entry.method === "exportCollage");
+  assert.ok(request, "exportCollage was not called");
+  assert.equal(request.args.prefix, "A");
+  assert.equal(request.args.folder, "D:\\work\\A");
+  assert.equal(request.args.format, "png");
+  assert.equal(request.args.quality, 10);
+  assert.equal(request.args.columns, 2);
+  assert.equal(request.args.targetWidth, 1000);
+  assert.equal(request.args.targetHeight, 1778);
+  assert.equal(request.args.selectionKey, "sel-1");
+
+  assert.match(panel.elements.get("status").textContent, /已导出拼图/);
+  assert.match(panel.elements.get("status").textContent,
+    /跳过 剪贴高光：依赖下方图层/);
+  assert.match(panel.elements.get("batch-details-body").textContent, /放入  3 个对象/);
+});
+
+test("collage export uses the clamped column count", () => {
+  const panel = bootCollage();
+  const columns = panel.elements.get("collage-columns");
+
+  columns.value = "9";
+  columns.fire("input");
+  columns.fire("change");
+  assert.equal(columns.value, "3");
+
+  panel.elements.get("export").fire("click");
+  const request = panel.requests.find((entry) => entry.method === "exportCollage");
+  assert.ok(request, "exportCollage was not called");
+  assert.equal(request.args.columns, 3);
+  assert.equal(request.args.targetWidth, null);
+  assert.equal(request.args.targetHeight, null);
+});
+
+test("collage target is cleared when the selection changes", () => {
+  const panel = bootCollage();
+  const width = panel.elements.get("collage-width");
+  const height = panel.elements.get("collage-height");
+
+  width.value = "1000";
+  width.fire("input");
+  assert.equal(height.value, "1778");
+
+  // Same selection: the target size survives the 5 s status poll.
+  panel.poll();
+  assert.equal(width.value, "1000");
+  assert.equal(height.value, "1778");
+
+  // A new selection key invalidates the per-selection target size.
+  panel.setCollageSelectionKey("sel-2");
+  panel.poll();
+  assert.equal(width.value, "");
+  assert.equal(height.value, "");
+  assert.equal(panel.elements.get("collage-size-hint").textContent,
+    "原始 2160 × 3840 → 导出 2160 × 3840");
+});
+
+test("collage export asks the user to retry after SELECTION_CHANGED", () => {
+  const panel = bootCollage();
+  panel.setExportCollageResult({
+    ok: false,
+    code: "SELECTION_CHANGED",
+    message: "当前文档或选中的图层已发生变化，请刷新选择后重试"
+  });
+  const previewsBefore = panel.requests.filter(
+    (entry) => entry.method === "previewCollage").length;
+
+  panel.elements.get("export").fire("click");
+
+  assert.match(panel.elements.get("status").textContent,
+    /选中的图层或文档已发生变化/);
+  const previewsAfter = panel.requests.filter(
+    (entry) => entry.method === "previewCollage").length;
+  assert.ok(previewsAfter > previewsBefore, "the panel must re-read the selection");
 });
