@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8"?>
 <!--
   Target: CEP 9 = Photoshop CC 2019 (20.x) and newer.
   Manifest Version 7.0 is the schema CEP 9 understands; newer CEP hosts accept
@@ -6,11 +6,11 @@
 -->
 <ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.fleatheryu.pngsmartexport"
-                   ExtensionBundleVersion="1.3.0"
+                   ExtensionBundleVersion="1.3.1"
                    ExtensionBundleName="Photoshop Quick PNG Export">
 
     <ExtensionList>
-        <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.3.0" />
+        <Extension Id="com.fleatheryu.pngsmartexport.panel" Version="1.3.1" />
     </ExtensionList>
 
     <ExecutionEnvironment>

@@ -702,6 +702,12 @@ var QPE = (function () {
     // layer. "targetLayersIDs" holds the same objects addressed by layer ID;
     // getIdentifier() on each entry returns the ID that matches layer.id.
     // Always read the ID list first and only fall back to the index list.
+    //
+    // CC 2019 also allows "no layer targeted at all" (for example after the
+    // user clicks the empty area below the layer list; app.runMenuItem
+    // "selectNoLayers" reproduces it). In that state the document descriptor
+    // carries NEITHER key - that is not a read failure, it simply means the
+    // panel must ask the user to select something.
     function readTargetLayerIdsByIds(documentDesc) {
         if (!documentDesc.hasKey(stringIDToTypeID("targetLayersIDs"))) {
             return null;
@@ -734,7 +740,12 @@ var QPE = (function () {
 
     function readTargetLayerIdsByIndex(documentDesc) {
         if (!documentDesc.hasKey(stringIDToTypeID("targetLayers"))) {
-            return fail("SELECTION_READ_FAILED", "无法读取当前选中的图层：Photoshop 没有返回 targetLayers");
+            // Both target-layer lists are missing: Photoshop has no layer
+            // targeted right now. Report it as "nothing selected" so the panel
+            // can show an instruction instead of an internal error.
+            return fail("NO_SELECTION",
+                "没有选中任何图层：请先在 Photoshop 图层面板中单击要导出的图层或图层组" +
+                "（按住 Ctrl 或 Shift 可以多选）");
         }
         var ids = [];
         var failedIndexes = [];

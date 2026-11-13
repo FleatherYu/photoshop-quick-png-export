@@ -95,6 +95,33 @@ README 的拼图模式截图由同一 mock 重新生成为
   （只验证了正常尺寸下不会写残留文件）。
 - 缩小导出的观感质量（`BICUBICSHARPER` 单次缩放）未做人工视觉判断。
 
+## 1.3.1 修复（2026-11-14）
+
+### 未选中图层时的提示
+
+真机使用反馈：在 Photoshop 里切到拼图模式时报
+「无法读取当前选中的图层：Photoshop 没有返回 targetLayers」。
+
+原因：Photoshop CC 2019 允许「一个图层也不选中」——例如单击图层面板列表下方的空白处，
+或者 `app.runMenuItem("selectNoLayers")` 之后。此时文档描述符里
+`targetLayersIDs` 与 `targetLayers` 两个键**都不存在**；旧实现把它当成读取失败，
+把内部键名直接抛给了用户。
+
+修复：两个键都缺失时返回 `NO_SELECTION` 和可操作的提示
+「没有选中任何图层：请先在 Photoshop 图层面板中单击要导出的图层或图层组
+（按住 Ctrl 或 Shift 可以多选）」。选中图层、批量、拼图三种模式共用同一段读取逻辑，
+提示一致。
+
+真机验证（CC 2019 20.0.10，临时测试文档，不动用户文档）：
+
+- `runMenuItem("selectNoLayers")` 后 `previewCollage` / `previewSelectedLayers`
+  均返回 `{"ok":false,"code":"NO_SELECTION"}` + 上面的新提示；
+- 再 `selectAllLayers` 后 `previewCollage` 正常返回 4 个对象、
+  `documentWidth/Height = 60`、`selectionKey` 完整，说明修复没有影响正常读取；
+- `node scripts/build-host.mjs --check` 通过，107 项单元测试全部通过。
+
+版本：`package.json` 与 `CSXS/manifest.xml` 均为 **1.3.1**（仅修复提示，不改行为）。
+
 ## 1.2.0 验收（2026-11-11）
 
 环境：Windows，Adobe Photoshop CC 2019 20.0.10（CEP 9），Node.js v24.15.0。
